@@ -6,7 +6,7 @@ import { doc, getDoc } from 'firebase/firestore';
 import { onAuthStateChanged } from 'firebase/auth';
 import { LogoutButton } from '~/components/LogoutButton';
 import type { UserDoc } from '~/types/user';
-import { ROUTE_USER_WORDS_EDIT } from '~/constants/routes';
+import { ROUTE_SIGN_IN, ROUTE_USER_WORDS_EDIT } from '~/constants/routes';
 
 export function WordListPage() {
   const { uid } = useParams<{ uid: string }>();
@@ -115,7 +115,7 @@ export function WordListPage() {
     return (
       <div className='container py-5'>
         <p>{error}</p>
-        <Link to='/sign/in' className='link-light'>
+        <Link to={ROUTE_SIGN_IN} className='link-light'>
           로그인 페이지로 이동
         </Link>
       </div>

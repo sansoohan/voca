@@ -27,6 +27,8 @@ function getBrowserOffsetString(): string {
 }
 
 export function isParsableDate(str: string): boolean {
+  if (!str) return false;
+
   const d = new Date(str);
   return !Number.isNaN(d.getTime());
 }
