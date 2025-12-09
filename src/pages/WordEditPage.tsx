@@ -9,6 +9,7 @@ import {
   wordLinesToText,
   shuffleLines,
   computeInitialPageSize,
+  paginate,
 } from '~/utils/editor';
 import { LogoutButton } from '~/components/LogoutButton';
 import type { UserDoc } from '~/types/user';
@@ -16,7 +17,7 @@ import { ROUTE_USER_WORDS } from '~/constants/routes';
 import { isParsableDate } from '~/utils/date';
 import { EditorModalMode, EditorMode } from '~/enums/editor';
 import type { PageSize } from '~/types/editor';
-import { allowedPageSizes } from '~/constants/editor';
+import { PaginationControls } from '~/components/PaginationControls';
 
 const SEP = '/|/';
 
@@ -166,14 +167,11 @@ export function WordEditPage() {
     return items;
   })();
 
-  // 페이지네이션 계산
-  const totalPages = simpleItems.length === 0 ? 0 : Math.ceil(simpleItems.length / pageSize);
-  const safePageIndex = totalPages === 0 ? 0 : Math.min(pageIndex, totalPages - 1);
-
-  const pagedItems = simpleItems.slice(
-    safePageIndex * pageSize,
-    safePageIndex * pageSize + pageSize
-  );
+  const {
+    totalPages,
+    safePageIndex,
+    pagedItems,
+  } = paginate(simpleItems, pageSize, pageIndex);
 
   // 간편 에디터: 단어 선택 핸들러
   const handleSelectItem = (lineIndex: number) => {
@@ -401,79 +399,17 @@ export function WordEditPage() {
             </button>
           </div>
 
-          {/* ✅ 페이지네이션 컨트롤 + 숫자 입력 */}
-          <div className="d-flex justify-content-between align-items-center mb-2">
-            <div className="d-flex align-items-center gap-2">
-              <span className="small text-secondary">페이지 당</span>
-              <select
-                className="form-select form-select-sm bg-black text-light"
-                style={{ width: 'auto' }}
-                value={pageSize}
-                onChange={e => {
-                  const newSize = Number(e.target.value) as PageSize;
-                  setPageSize(newSize);
-                  setPageIndex(0);
-                }}
-              >
-                <>
-                  {allowedPageSizes.map((pageSizes) => {
-                    return (<option value={pageSizes}>{`${pageSizes}개`}</option>);
-                  })}
-                </>
-              </select>
-            </div>
-
-            <div className="d-flex align-items-center gap-2">
-              <button
-                className="btn btn-sm btn-outline-light"
-                disabled={safePageIndex <= 0 || totalPages === 0}
-                onClick={() =>
-                  setPageIndex(prev => Math.max(0, prev - 1))
-                }
-              >
-                ◀
-              </button>
-
-              {/* 전체 페이지 */}
-              <span className="small text-secondary">
-                {`${totalPages} 페이지 중 `}
-              </span>
-
-              {/* ✅ 숫자 입력으로 페이지 점프 */}
-              <input
-                type="number"
-                className="form-control form-control-sm bg-black text-light"
-                style={{ width: 70 }}
-                min={totalPages === 0 ? 0 : 1}
-                max={totalPages === 0 ? 0 : totalPages}
-                value={totalPages === 0 ? 0 : safePageIndex + 1}
-                onChange={e => {
-                  if (totalPages === 0) return;
-                  const raw = Number(e.target.value);
-                  if (Number.isNaN(raw)) return;
-                  const clamped = Math.min(
-                    totalPages,
-                    Math.max(1, raw),
-                  );
-                  setPageIndex(clamped - 1);
-                }}
-              />
-
-              <button
-                className="btn btn-sm btn-outline-light"
-                disabled={
-                  totalPages === 0 || safePageIndex >= totalPages - 1
-                }
-                onClick={() =>
-                  setPageIndex(prev =>
-                    Math.min(totalPages - 1, prev + 1),
-                  )
-                }
-              >
-                ▶
-              </button>
-            </div>
-          </div>
+          <PaginationControls
+            className="w-100 justify-content-between mb-2"
+            pageSize={pageSize}
+            pageIndex={safePageIndex}
+            totalPages={totalPages}
+            onPageSizeChange={size => {
+              setPageSize(size);
+              setPageIndex(0);
+            }}
+            onPageIndexChange={setPageIndex}
+          />
 
           {/* 단어 리스트 (페이지 단위) */}
           <ul

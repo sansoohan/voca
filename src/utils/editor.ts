@@ -89,3 +89,25 @@ export const computeInitialPageSize = (reservedForHeader: number): PageSize => {
   }
   return best;
 };
+
+export function paginate<T>(
+  items: T[],
+  pageSize: PageSize,
+  pageIndex: number,
+) {
+  const totalPages =
+    items.length === 0 ? 0 : Math.ceil(items.length / pageSize);
+
+  const safePageIndex =
+    totalPages === 0 ? 0 : Math.min(pageIndex, totalPages - 1);
+
+  const pageStart = safePageIndex * pageSize;
+  const pagedItems = items.slice(pageStart, pageStart + pageSize);
+
+  return {
+    totalPages,
+    safePageIndex,
+    pageStart,
+    pagedItems,
+  };
+}

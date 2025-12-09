@@ -8,8 +8,8 @@ import { LogoutButton } from '~/components/LogoutButton';
 import type { UserDoc } from '~/types/user';
 import { ROUTE_SIGN_IN, ROUTE_USER_WORDS_EDIT } from '~/constants/routes';
 import type { PageSize } from '~/types/editor';
-import { computeInitialPageSize } from '~/utils/editor';
-import { allowedPageSizes } from '~/constants/editor';
+import { computeInitialPageSize, paginate } from '~/utils/editor';
+import { PaginationControls } from '~/components/PaginationControls';
 
 export function WordListPage() {
   const { uid } = useParams<{ uid: string }>();
@@ -140,80 +140,28 @@ export function WordListPage() {
   const canEdit = currentUserUid === uid;
   const lines = userDoc.words.split('\n').filter((l: string) => l.trim() !== '');
 
-  // ✅ 페이지네이션 계산
-  const totalPages = lines.length === 0 ? 0 : Math.ceil(lines.length / pageSize);
-  const safePageIndex = totalPages === 0 ? 0 : Math.min(pageIndex, totalPages - 1);
-  const pageStart = safePageIndex * pageSize;
-  const pagedLines = lines.slice(pageStart, pageStart + pageSize);
+  const {
+    totalPages,
+    safePageIndex,
+    pageStart,
+    pagedItems: pagedLines,   // 이름만 바꿔서 사용
+  } = paginate(lines, pageSize, pageIndex);
 
   return (
     <div className='container-fluid py-3' style={{ height: '100vh', overflow: 'hidden' }}>
       {/* --- 상단 바: 왼쪽 페이지네이션, 오른쪽 수정/로그아웃 --- */}
       <div className='d-flex justify-content-between align-items-center mb-3'>
-        {/* 🔹 왼쪽: 페이지네이션 컨트롤 */}
-        <div className='d-flex align-items-center gap-3'>
-          <div className='d-flex align-items-center gap-2'>
-            <span className='small text-secondary'>페이지 당</span>
-            <select
-              className='form-select form-select-sm bg-black text-light'
-              style={{ width: 'auto' }}
-              value={pageSize}
-              onChange={(e) => {
-                const newSize = Number(e.target.value) as PageSize;
-                setPageSize(newSize);
-                setPageIndex(0);
-              }}
-            >
-              <>
-                {allowedPageSizes.map((pageSizes) => {
-                  return (<option value={pageSizes}>{`${pageSizes}개`}</option>);
-                })}
-              </>
-            </select>
-          </div>
+        <PaginationControls
+          pageSize={pageSize}
+          pageIndex={safePageIndex}
+          totalPages={totalPages}
+          onPageSizeChange={size => {
+            setPageSize(size);
+            setPageIndex(0);
+          }}
+          onPageIndexChange={setPageIndex}
+        />
 
-          <div className='d-flex align-items-center gap-2'>
-            <button
-              className='btn btn-sm btn-outline-light'
-              disabled={safePageIndex <= 0 || totalPages === 0}
-              onClick={() => setPageIndex((prev) => Math.max(0, prev - 1))}
-            >
-              ◀
-            </button>
-
-            <span className='small text-secondary'>
-              {totalPages === 0 ? '0 / 0' : `${safePageIndex + 1} / ${totalPages}`}
-            </span>
-
-            <input
-              type='number'
-              className='form-control form-control-sm bg-black text-light'
-              style={{ width: 70 }}
-              min={totalPages === 0 ? 0 : 1}
-              max={totalPages === 0 ? 0 : totalPages}
-              value={totalPages === 0 ? 0 : safePageIndex + 1}
-              onChange={(e) => {
-                if (totalPages === 0) return;
-                const raw = Number(e.target.value);
-                if (Number.isNaN(raw)) return;
-                const clamped = Math.min(totalPages, Math.max(1, raw));
-                setPageIndex(clamped - 1);
-              }}
-            />
-
-            <button
-              className='btn btn-sm btn-outline-light'
-              disabled={totalPages === 0 || safePageIndex >= totalPages - 1}
-              onClick={() =>
-                setPageIndex((prev) => Math.min(totalPages - 1, prev + 1))
-              }
-            >
-              ▶
-            </button>
-          </div>
-        </div>
-
-        {/* 🔹 오른쪽: 수정 버튼 + 로그아웃 */}
         <div className="d-flex align-items-center gap-2">
           {canEdit && (
             <button
