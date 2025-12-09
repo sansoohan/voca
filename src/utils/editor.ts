@@ -1,5 +1,7 @@
 // utils/words.ts
+import type { PageSize } from '~/types/editor';
 import { nowIso8601Format, isParsableDate } from './date';
+import { allowedPageSizes } from '~/constants/editor';
 
 export interface WordLine {
   word: string;
@@ -74,3 +76,16 @@ export function shuffleLines(raw: string): string {
   return lines.join('\n');
 }
 
+export const computeInitialPageSize = (reservedForHeader: number): PageSize => {
+  const vh = window.innerHeight;
+  const available = Math.max(0, vh - reservedForHeader);
+
+  const approximateRowHeight = 26;
+  const approxCount = Math.max(5, Math.floor(available / approximateRowHeight));
+
+  let best: PageSize = 10;
+  for (const size of allowedPageSizes) {
+    if (size <= approxCount) best = size;
+  }
+  return best;
+};

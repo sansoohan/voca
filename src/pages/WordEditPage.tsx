@@ -4,17 +4,21 @@ import { useParams, useNavigate, generatePath } from 'react-router-dom';
 import { onAuthStateChanged } from 'firebase/auth';
 import { doc, getDoc, updateDoc } from 'firebase/firestore';
 import { auth, firestore, VITE_VOCA_ENV } from '~/constants/firebase';
-import { parseTextToWordLines, wordLinesToText, shuffleLines } from '~/utils/words';
+import {
+  parseTextToWordLines,
+  wordLinesToText,
+  shuffleLines,
+  computeInitialPageSize,
+} from '~/utils/editor';
 import { LogoutButton } from '~/components/LogoutButton';
 import type { UserDoc } from '~/types/user';
 import { ROUTE_USER_WORDS } from '~/constants/routes';
 import { isParsableDate } from '~/utils/date';
-import { EditorMode } from '~/enums/editor';
+import { EditorModalMode, EditorMode } from '~/enums/editor';
+import type { PageSize } from '~/types/editor';
+import { allowedPageSizes } from '~/constants/editor';
 
 const SEP = '/|/';
-
-// ✅ 브라우저 높이에 맞춰 고를 수 있게 더 많은 옵션 허용
-type PageSize = 10 | 15 | 20 | 25 | 30 | 40 | 50;
 
 // 간편 에디터에서 보여줄 아이템 (원본 lineIndex를 기억해야 함)
 type SimpleItem = {
@@ -68,11 +72,11 @@ export function WordEditPage() {
   const [selectedLineIndex, setSelectedLineIndex] = useState<number | null>(null);
 
   // 간편 에디터 페이지네이션 상태
-  const [pageSize, setPageSize] = useState<PageSize>(20);
+  const [pageSize, setPageSize] = useState<PageSize>(computeInitialPageSize(150));
   const [pageIndex, setPageIndex] = useState(0); // 0-based
 
   const [modalOpen, setModalOpen] = useState(false);
-  const [modalMode, setModalMode] = useState<'add' | 'edit'>('add');
+  const [editorModalMode, setEditorModalMode] = useState<EditorModalMode>(EditorModalMode.Add);
   const [modalWord, setModalWord] = useState('');
   const [modalLink, setModalLink] = useState('');
 
@@ -121,35 +125,6 @@ export function WordEditPage() {
     return () => unsub();
   }, [uid]);
 
-  // ✅ 처음 로딩 시, 브라우저 높이를 보고 pageSize 자동 결정
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-
-    const allowedSizes: PageSize[] = [10, 15, 20, 25, 30, 40, 50];
-
-    const vh = window.innerHeight; // 전체 브라우저 높이
-    // 대략 헤더/버튼/패딩 등 빼고 남는 리스트 영역 추정
-    const reservedForHeader = 150; // px (필요하면 나중에 조정)
-    const available = Math.max(0, vh - reservedForHeader);
-
-    const approximateRowHeight = 26; // li 하나당 높이 (대략)
-    const approxCount = Math.max(
-      5,
-      Math.floor(available / approximateRowHeight),
-    );
-
-    // approxCount 이하인 옵션 중 가장 큰 값 선택
-    let best: PageSize = 10;
-    for (const size of allowedSizes) {
-      if (size <= approxCount) {
-        best = size;
-      }
-    }
-
-    setPageSize(best);
-    setPageIndex(0);
-  }, []);
-
   const handleBack = () => {
     if (!uid) return;
     nav(generatePath(ROUTE_USER_WORDS, { uid }));
@@ -192,16 +167,12 @@ export function WordEditPage() {
   })();
 
   // 페이지네이션 계산
-  const totalPages = simpleItems.length === 0
-    ? 0
-    : Math.ceil(simpleItems.length / pageSize);
-
-  const safePageIndex =
-    totalPages === 0 ? 0 : Math.min(pageIndex, totalPages - 1);
+  const totalPages = simpleItems.length === 0 ? 0 : Math.ceil(simpleItems.length / pageSize);
+  const safePageIndex = totalPages === 0 ? 0 : Math.min(pageIndex, totalPages - 1);
 
   const pagedItems = simpleItems.slice(
     safePageIndex * pageSize,
-    safePageIndex * pageSize + pageSize,
+    safePageIndex * pageSize + pageSize
   );
 
   // 간편 에디터: 단어 선택 핸들러
@@ -211,7 +182,7 @@ export function WordEditPage() {
 
   // 모달 열기 (추가/수정)
   const openAddModal = () => {
-    setModalMode('add');
+    setEditorModalMode(EditorModalMode.Add);
     setModalWord('');
     setModalLink('');
     setModalOpen(true);
@@ -225,7 +196,7 @@ export function WordEditPage() {
     const parsed = parseLineForSimple(line, selectedLineIndex);
     if (!parsed) return;
 
-    setModalMode('edit');
+    setEditorModalMode(EditorModalMode.Edit);
     setModalWord(parsed.word);
     setModalLink(parsed.link ?? '');
     setModalOpen(true);
@@ -249,7 +220,7 @@ export function WordEditPage() {
 
     const lines = text.split(/\r?\n/);
 
-    if (modalMode === 'add') {
+    if (editorModalMode === EditorModalMode.Add) {
       let insertIndex = 0;
       if (selectedLineIndex != null) {
         insertIndex = selectedLineIndex + 1;
@@ -444,14 +415,11 @@ export function WordEditPage() {
                   setPageIndex(0);
                 }}
               >
-                {/* ✅ 옵션 value 잘못된 부분 정리 + 타입과 일치 */}
-                <option value={50}>50개</option>
-                <option value={40}>40개</option>
-                <option value={30}>30개</option>
-                <option value={25}>25개</option>
-                <option value={20}>20개</option>
-                <option value={15}>15개</option>
-                <option value={10}>10개</option>
+                <>
+                  {allowedPageSizes.map((pageSizes) => {
+                    return (<option value={pageSizes}>{`${pageSizes}개`}</option>);
+                  })}
+                </>
               </select>
             </div>
 
@@ -569,7 +537,7 @@ export function WordEditPage() {
         >
           <div className="bg-dark text-light p-3 rounded" style={{ minWidth: 320 }}>
             <h5 className="mb-3">
-              {modalMode === 'add' ? '단어 추가' : '단어 수정'}
+              {editorModalMode === EditorModalMode.Add ? '단어 추가' : '단어 수정'}
             </h5>
 
             <div className="mb-2">

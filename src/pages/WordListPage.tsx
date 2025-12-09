@@ -7,12 +7,15 @@ import { onAuthStateChanged } from 'firebase/auth';
 import { LogoutButton } from '~/components/LogoutButton';
 import type { UserDoc } from '~/types/user';
 import { ROUTE_SIGN_IN, ROUTE_USER_WORDS_EDIT } from '~/constants/routes';
+import type { PageSize } from '~/types/editor';
+import { computeInitialPageSize } from '~/utils/editor';
+import { allowedPageSizes } from '~/constants/editor';
 
 export function WordListPage() {
   const { uid } = useParams<{ uid: string }>();
   const nav = useNavigate();
 
-  const [userDoc, setUserDoc] = useState<UserDoc|undefined>(undefined);
+  const [userDoc, setUserDoc] = useState<UserDoc | undefined>(undefined);
   const [currentUserUid, setCurrentUserUid] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -26,6 +29,10 @@ export function WordListPage() {
 
   const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
   const [mobileMode, setMobileMode] = useState(false); // 모바일일 때 iframe만 보기 모드
+
+  // ✅ 단어 리스트 페이지네이션 상태
+  const [pageSize, setPageSize] = useState<PageSize>(computeInitialPageSize(120));
+  const [pageIndex, setPageIndex] = useState(0); // 0-based
 
   // Resize detection
   useEffect(() => {
@@ -133,20 +140,91 @@ export function WordListPage() {
   const canEdit = currentUserUid === uid;
   const lines = userDoc.words.split('\n').filter((l: string) => l.trim() !== '');
 
+  // ✅ 페이지네이션 계산
+  const totalPages = lines.length === 0 ? 0 : Math.ceil(lines.length / pageSize);
+  const safePageIndex = totalPages === 0 ? 0 : Math.min(pageIndex, totalPages - 1);
+  const pageStart = safePageIndex * pageSize;
+  const pagedLines = lines.slice(pageStart, pageStart + pageSize);
+
   return (
     <div className='container-fluid py-3' style={{ height: '100vh', overflow: 'hidden' }}>
-      {/* --- 상단 버튼 --- */}
+      {/* --- 상단 바: 왼쪽 페이지네이션, 오른쪽 수정/로그아웃 --- */}
       <div className='d-flex justify-content-between align-items-center mb-3'>
-        {canEdit && (
-          <button
-            className='btn btn-primary'
-            onClick={() => nav(generatePath(ROUTE_USER_WORDS_EDIT, { uid }))}
-          >
-            수정
-          </button>
-        )}
+        {/* 🔹 왼쪽: 페이지네이션 컨트롤 */}
+        <div className='d-flex align-items-center gap-3'>
+          <div className='d-flex align-items-center gap-2'>
+            <span className='small text-secondary'>페이지 당</span>
+            <select
+              className='form-select form-select-sm bg-black text-light'
+              style={{ width: 'auto' }}
+              value={pageSize}
+              onChange={(e) => {
+                const newSize = Number(e.target.value) as PageSize;
+                setPageSize(newSize);
+                setPageIndex(0);
+              }}
+            >
+              <>
+                {allowedPageSizes.map((pageSizes) => {
+                  return (<option value={pageSizes}>{`${pageSizes}개`}</option>);
+                })}
+              </>
+            </select>
+          </div>
 
-        <LogoutButton />
+          <div className='d-flex align-items-center gap-2'>
+            <button
+              className='btn btn-sm btn-outline-light'
+              disabled={safePageIndex <= 0 || totalPages === 0}
+              onClick={() => setPageIndex((prev) => Math.max(0, prev - 1))}
+            >
+              ◀
+            </button>
+
+            <span className='small text-secondary'>
+              {totalPages === 0 ? '0 / 0' : `${safePageIndex + 1} / ${totalPages}`}
+            </span>
+
+            <input
+              type='number'
+              className='form-control form-control-sm bg-black text-light'
+              style={{ width: 70 }}
+              min={totalPages === 0 ? 0 : 1}
+              max={totalPages === 0 ? 0 : totalPages}
+              value={totalPages === 0 ? 0 : safePageIndex + 1}
+              onChange={(e) => {
+                if (totalPages === 0) return;
+                const raw = Number(e.target.value);
+                if (Number.isNaN(raw)) return;
+                const clamped = Math.min(totalPages, Math.max(1, raw));
+                setPageIndex(clamped - 1);
+              }}
+            />
+
+            <button
+              className='btn btn-sm btn-outline-light'
+              disabled={totalPages === 0 || safePageIndex >= totalPages - 1}
+              onClick={() =>
+                setPageIndex((prev) => Math.min(totalPages - 1, prev + 1))
+              }
+            >
+              ▶
+            </button>
+          </div>
+        </div>
+
+        {/* 🔹 오른쪽: 수정 버튼 + 로그아웃 */}
+        <div className="d-flex align-items-center gap-2">
+          {canEdit && (
+            <button
+              className='btn btn-primary'
+              onClick={() => nav(generatePath(ROUTE_USER_WORDS_EDIT, { uid }))}
+            >
+              수정
+            </button>
+          )}
+          <LogoutButton />
+        </div>
       </div>
 
       {/* --- 메인 2-컬럼 레이아웃 (모바일 분기 포함) --- */}
@@ -161,8 +239,12 @@ export function WordListPage() {
               paddingRight: 5,
             }}
           >
-            <ul className='list-group list-group-flush'>
-              {lines.map((line: string, idx: number) => {
+            <ul
+              className='list-group list-group-flush'
+              style={{ listStyle: 'none', paddingLeft: 0, marginBottom: 0 }}
+            >
+              {pagedLines.map((line: string, localIdx: number) => {
+                const idx = pageStart + localIdx; // 원래 전체 인덱스
                 const parts = line.split('/|/');
                 const word = parts[0]?.trim();
                 const link = parts[1]?.trim();
@@ -182,14 +264,12 @@ export function WordListPage() {
                     }}
                     onClick={() => {
                       if (!link) {
-                        // 링크가 없는 단어는 선택 해제만.
                         setSelectedLink(null);
                         setSelectedIndex(null);
                         setMobileMode(false);
                         return;
                       }
 
-                      // 이미 선택된 같은 줄을 다시 클릭하면 토글(닫기)
                       if (selectedIndex === idx) {
                         setSelectedLink(null);
                         setSelectedIndex(null);
@@ -197,10 +277,8 @@ export function WordListPage() {
                         return;
                       }
 
-                      // 다른 줄을 클릭한 경우: 항상 새 선택
                       setSelectedIndex(idx);
 
-                      // 링크가 바뀔 때만 로딩 스피너 표시 (같은 링크라면 그대로 두고 싶으면 이 조건 유지)
                       if (selectedLink !== link) {
                         setIframeLoading(true);
                       }
@@ -216,6 +294,11 @@ export function WordListPage() {
                   </li>
                 );
               })}
+              {lines.length === 0 && (
+                <li className='list-group-item bg-black text-secondary'>
+                  단어가 없습니다. 에디터에서 단어를 추가해 주세요.
+                </li>
+              )}
             </ul>
           </div>
         )}
@@ -233,15 +316,15 @@ export function WordListPage() {
         )}
 
         {/* RIGHT (iframe viewer) */}
-        <div className="flex-grow-1 position-relative">
+        <div className='flex-grow-1 position-relative'>
           {selectedLink ? (
             <>
               {iframeLoading && (
                 <div
-                  className="position-absolute top-50 start-50 translate-middle text-light"
+                  className='position-absolute top-50 start-50 translate-middle text-light'
                   style={{ zIndex: 10 }}
                 >
-                  <div className="spinner-border text-info" />
+                  <div className='spinner-border text-info' />
                 </div>
               )}
 
@@ -259,7 +342,7 @@ export function WordListPage() {
               />
             </>
           ) : (
-            <div className="text-secondary d-flex justify-content-center align-items-center h-100">
+            <div className='text-secondary d-flex justify-content-center align-items-center h-100'>
               단어를 클릭하면 오른쪽에 치트시트가 표시됩니다.
             </div>
           )}
