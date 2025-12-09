@@ -1,0 +1,28 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /voca/{env} {
+      function isAvailableEnv() {
+        return env in ['localdev', 'dev', 'stage', 'prod', 'hotfix'];
+      }
+
+      match /users/{uid} {
+        function hasPublicReadAccess() {
+          return resource.data.readAccess == 'Public';
+        }
+
+        function hasOwnerAccess() {
+          return request.auth != null && request.auth.uid == uid;
+        }
+
+        allow get, list: if (
+          isAvailableEnv() && (hasOwnerAccess() || hasPublicReadAccess())
+        );
+
+        allow create, update, delete: if (
+          isAvailableEnv() && hasOwnerAccess()
+        );
+      }
+    }
+  }
+}

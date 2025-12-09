@@ -1,0 +1,95 @@
+{
+  "firestore": {
+    "database": "(default)",
+    "location": "asia-northeast3",
+    "rules": "firestore.rules",
+    "indexes": "firestore.indexes.json"
+  },
+  "functions": [
+    {
+      "source": "functions",
+      "codebase": "default",
+      "disallowLegacyRuntimeConfig": true,
+      "ignore": [
+        "node_modules",
+        ".git",
+        "firebase-debug.log",
+        "firebase-debug.*.log",
+        "*.local"
+      ],
+      "predeploy": [
+        "npm --prefix \"$RESOURCE_DIR\" run lint",
+        "npm --prefix \"$RESOURCE_DIR\" run build"
+      ]
+    }
+  ],
+  "hosting": [
+    {
+      "target": "dev",
+      "predeploy": [ "npm run build:dev" ],
+      "postdeploy": [ "rm -rf ./dev"],
+      "public": "./dev",
+      "ignore": [ "firebase.json", "**/.*", "**/node_modules/**" ],
+      "rewrites": [{ "source": "**", "destination": "/index.html" }],
+      "headers": [{
+        "source": "**/*.@(eot|otf|ttf|ttc|woff|font.css|pdf|mp4|webm|avi|ogg|mkv|mov|wmv|asf|json)",
+        "headers": [{ "key": "Access-Control-Allow-Origin", "value": "*" }]
+      }]
+    },
+    {
+      "target": "stage",
+      "predeploy": [ "npm run build:stage" ],
+      "postdeploy": [ "rm -rf ./stage"],
+      "public": "./stage",
+      "ignore": [ "firebase.json", "**/.*", "**/node_modules/**" ],
+      "rewrites": [{ "source": "**", "destination": "/index.html" }],
+      "headers": [{
+        "source": "**/*.@(eot|otf|ttf|ttc|woff|font.css|pdf|mp4|webm|avi|ogg|mkv|mov|wmv|asf|json)",
+        "headers": [{ "key": "Access-Control-Allow-Origin", "value": "*" }]
+      }]
+    },
+    {
+      "target": "prod",
+      "predeploy": [ "npm run build:prod" ],
+      "postdeploy": [ "rm -rf ./prod"],
+      "public": "./prod",
+      "ignore": [ "firebase.json", "**/.*", "**/node_modules/**" ],
+      "rewrites": [{ "source": "**", "destination": "/index.html" }],
+      "headers": [{
+        "source": "**/*.@(eot|otf|ttf|ttc|woff|font.css|pdf|mp4|webm|avi|ogg|mkv|mov|wmv|asf|json)",
+        "headers": [{ "key": "Access-Control-Allow-Origin", "value": "*" }]
+      }]
+    },
+    {
+      "target": "hotfix",
+      "predeploy": [ "npm run build:hotfix" ],
+      "postdeploy": [ "rm -rf ./hotfix"],
+      "public": "./hotfix",
+      "ignore": [ "firebase.json", "**/.*", "**/node_modules/**" ],
+      "rewrites": [{ "source": "**", "destination": "/index.html" }],
+      "headers": [{
+        "source": "**/*.@(eot|otf|ttf|ttc|woff|font.css|pdf|mp4|webm|avi|ogg|mkv|mov|wmv|asf|json)",
+        "headers": [{ "key": "Access-Control-Allow-Origin", "value": "*" }]
+      }]
+    }
+  ],
+
+  "storage": {
+    "rules": "storage.rules"
+  },
+  "emulators": {
+    "auth": { "host": "0.0.0.0", "port": 8200 },
+    "functions": { "host": "0.0.0.0", "port": 8300 },
+    "firestore": { "host": "0.0.0.0", "port": 8100 },
+    "database": { "host": "0.0.0.0", "port": 8400 },
+    "hosting": { "host": "0.0.0.0", "port": 8600 },
+    "pubsub": { "host": "0.0.0.0", "port": 8500 },
+    "storage": { "host": "0.0.0.0", "port": 8700 },
+    "ui": { "host": "0.0.0.0", "enabled": true, "port":8900 },
+    "hub":{ "port": 8800 },
+    "singleProjectMode": true
+  },
+  "database": {
+    "rules": "database.rules.json"
+  }
+}

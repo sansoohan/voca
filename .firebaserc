@@ -1,0 +1,24 @@
+{
+  "projects": {
+    "default": "vocabook-6acc6"
+  },
+  "targets": {
+    "vocabook-6acc6": {
+      "hosting": {
+        "dev": [
+          "vocabook-6acc6-dev"
+        ],
+        "stage": [
+          "vocabook-6acc6-stage"
+        ],
+        "prod": [
+          "vocabook-6acc6"
+        ],
+        "hotfix": [
+          "vocabook-6acc6-hotfix"
+        ]
+      }
+    }
+  },
+  "etags": {}
+}
