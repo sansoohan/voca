@@ -1,62 +1,24 @@
 // pages/WordEditPage.tsx
 import { useEffect, useState, useRef } from 'react';
 import { useParams, useNavigate, generatePath } from 'react-router-dom';
-import { onAuthStateChanged } from 'firebase/auth';
-import { doc, getDoc, updateDoc } from 'firebase/firestore';
-import { auth, firestore, VITE_VOCA_ENV } from '~/constants/firebase';
+import { onAuthStateChanged, signOut } from 'firebase/auth';
+import { auth, storage } from '~/constants/firebase';
 import {
   parseTextToWordLines,
   wordLinesToText,
   shuffleLines,
   computeInitialPageSize,
   paginate,
+  parseLineForSimple,
 } from '~/utils/editor';
-import { LogoutButton } from '~/components/LogoutButton';
-import type { UserDoc } from '~/types/user';
-import { ROUTE_USER_WORDS } from '~/constants/routes';
-import { isParsableDate } from '~/utils/date';
+import { ROUTE_USER_WORDS, ROUTE_SIGN_IN } from '~/constants/routes';
 import { EditorModalMode, EditorMode } from '~/enums/editor';
-import type { PageSize } from '~/types/editor';
+import type { PageSize, SimpleItem } from '~/types/editor';
 import { PaginationControls } from '~/components/PaginationControls';
-
-const SEP = '/|/';
-
-// 간편 에디터에서 보여줄 아이템 (원본 lineIndex를 기억해야 함)
-type SimpleItem = {
-  lineIndex: number; // text.split('\n') 기준 인덱스
-  word: string;
-  link: string | null;
-};
-
-// 한 줄을 파싱해서 단어/링크만 뽑아보고, 잘못된 포맷이면 null
-function parseLineForSimple(line: string, index: number): SimpleItem | null {
-  const trimmed = line.trim();
-  if (!trimmed) return null;
-
-  const parts = trimmed.split(SEP);
-
-  // 허용 필드 수: 1~4
-  if (parts.length < 1 || parts.length > 4) {
-    return null;
-  }
-
-  const word = parts[0]?.trim();
-  if (!word) return null;
-
-  const link = (parts[1]?.trim() || '') || null;
-  const createdAtRaw = (parts[2]?.trim() || '') || null;
-
-  // 작성시간이 있다면 유효해야 함
-  if (createdAtRaw && !isParsableDate(createdAtRaw)) {
-    return null;
-  }
-
-  return {
-    lineIndex: index,
-    word,
-    link,
-  };
-}
+import { ref as storageRef, getDownloadURL, uploadString, getMetadata } from 'firebase/storage';
+import { UserLevel } from '~/enums/user';
+import { getDefaultWordbookPath } from '~/utils/storage';
+import { SEP } from '~/constants/editor';
 
 export function WordEditPage() {
   const { uid } = useParams<{ uid: string }>();
@@ -69,6 +31,9 @@ export function WordEditPage() {
 
   const [editorMode, setEditorMode] = useState<EditorMode>(EditorMode.Simple);
 
+  // 공개 범위 상태 (기본: 비공개 Owner)
+  const [readAccess, setReadAccess] = useState<UserLevel>(UserLevel.Owner);
+
   // 간편 에디터 상태 (원본 텍스트 기준 lineIndex)
   const [selectedLineIndex, setSelectedLineIndex] = useState<number | null>(null);
 
@@ -77,7 +42,8 @@ export function WordEditPage() {
   const [pageIndex, setPageIndex] = useState(0); // 0-based
 
   const [modalOpen, setModalOpen] = useState(false);
-  const [editorModalMode, setEditorModalMode] = useState<EditorModalMode>(EditorModalMode.Add);
+  const [editorModalMode, setEditorModalMode] =
+    useState<EditorModalMode>(EditorModalMode.Add);
   const [modalWord, setModalWord] = useState('');
   const [modalLink, setModalLink] = useState('');
 
@@ -105,19 +71,43 @@ export function WordEditPage() {
           return;
         }
 
-        const snap = await getDoc(doc(firestore, 'voca', VITE_VOCA_ENV, 'users', uid));
-        if (!snap.exists()) {
-          setError('유저 데이터를 찾을 수 없습니다.');
-          setLoading(false);
-          return;
-        }
+        const path = getDefaultWordbookPath(uid);
+        const fileRef = storageRef(storage, path);
 
-        const data = snap.data() as UserDoc;
-        setText(data.words ?? '');
-        setError(null);
+        try {
+          // 텍스트 + 메타데이터를 함께 가져오기
+          const [url, meta] = await Promise.all([
+            getDownloadURL(fileRef),
+            getMetadata(fileRef),
+          ]);
+
+          const res = await fetch(url);
+          const txt = await res.text();
+          setText(txt ?? '');
+
+          const metaAccess = meta.customMetadata?.readAccess as | UserLevel | undefined;
+
+          // 메타데이터 없으면 기본 Owner
+          setReadAccess(metaAccess === UserLevel.Public ? UserLevel.Public : UserLevel.Owner);
+
+          setError(null);
+        } catch (err: any) {
+          console.error(err);
+
+          if (err.code === 'storage/object-not-found') {
+            // 파일이 없는 경우: 에러로 막지 말고 "빈 단어장 + 비공개"로 시작
+            setText('');
+            setReadAccess(UserLevel.Owner);
+            setError(null);
+          } else {
+            // 진짜 오류일 때만 에러 화면으로 보냄
+            setError('단어장을 불러오는 중 오류가 발생했습니다.');
+            setText('');
+          }
+        }
       } catch (e) {
         console.error(e);
-        setError('데이터를 불러오는 중 오류가 발생했습니다.');
+        setError('단어장을 불러오는 중 오류가 발생했습니다.');
       } finally {
         setLoading(false);
       }
@@ -145,8 +135,14 @@ export function WordEditPage() {
       const lines = parseTextToWordLines(text);
       const newText = wordLinesToText(lines);
 
-      await updateDoc(doc(firestore, 'voca', VITE_VOCA_ENV, 'users', uid), {
-        words: newText,
+      const path = getDefaultWordbookPath(uid);
+      const fileRef = storageRef(storage, path);
+
+      // 저장할 때 현재 readAccess 를 메타데이터에 반영
+      await uploadString(fileRef, newText, 'raw', {
+        customMetadata: {
+          readAccess,
+        },
       });
 
       nav(generatePath(ROUTE_USER_WORDS, { uid }));
@@ -154,6 +150,61 @@ export function WordEditPage() {
       console.error(e);
       setError('저장 중 오류가 발생했습니다.');
     }
+  };
+
+  const handleLogout = async () => {
+    try {
+      await signOut(auth);
+      nav(ROUTE_SIGN_IN);
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  // 에디터 모드 토글 (고급 → 간편)
+  const switchToSimpleEditor = () => {
+    if (editorMode === EditorMode.Simple) return;
+
+    if (advancedTextareaRef.current) {
+      const el = advancedTextareaRef.current;
+      const caret = el.selectionStart ?? 0;
+      const before = text.slice(0, caret);
+      const lineIndex = before.split(/\r?\n/).length - 1; // 0-based
+
+      setSelectedLineIndex(lineIndex);
+
+      // 해당 줄이 있는 페이지로 이동
+      const simpleItems: SimpleItem[] = (() => {
+        const lines = text.split(/\r?\n/);
+        const items: SimpleItem[] = [];
+        lines.forEach((line, idx) => {
+          const parsed = parseLineForSimple(line, idx);
+          if (parsed) items.push(parsed);
+        });
+        return items;
+      })();
+
+      const idx = simpleItems.findIndex(item => item.lineIndex === lineIndex);
+      if (idx !== -1) {
+        const newPageIndex = Math.floor(idx / pageSize);
+        setPageIndex(newPageIndex);
+      }
+    }
+
+    setEditorMode(EditorMode.Simple);
+  };
+
+  // 에디터 모드 토글 (간편 → 고급)
+  const switchToAdvancedEditor = () => {
+    if (editorMode === EditorMode.Advanced) return;
+    setEditorMode(EditorMode.Advanced);
+  };
+
+  // 공개 범위 토글
+  const toggleReadAccess = () => {
+    setReadAccess(prev =>
+      prev === UserLevel.Owner ? UserLevel.Public : UserLevel.Owner,
+    );
   };
 
   // 간편 에디터용: text → SimpleItem[]
@@ -167,11 +218,11 @@ export function WordEditPage() {
     return items;
   })();
 
-  const {
-    totalPages,
-    safePageIndex,
-    pagedItems,
-  } = paginate(simpleItems, pageSize, pageIndex);
+  const { totalPages, safePageIndex, pagedItems } = paginate(
+    simpleItems,
+    pageSize,
+    pageIndex,
+  );
 
   // 간편 에디터: 단어 선택 핸들러
   const handleSelectItem = (lineIndex: number) => {
@@ -245,7 +296,7 @@ export function WordEditPage() {
     setSelectedLineIndex(null);
   };
 
-  // ✅ 간편 → 고급: 선택된 단어 위치로 커서 이동 + 스크롤 조정
+  // 간편 → 고급: 선택된 단어 위치로 커서 이동 + 스크롤 조정
   useEffect(() => {
     if (editorMode !== EditorMode.Advanced) return;
     if (selectedLineIndex == null) return;
@@ -261,11 +312,9 @@ export function WordEditPage() {
     el.focus();
     el.selectionStart = el.selectionEnd = pos;
 
-    // 브라우저가 자동으로 안 내려줄 때를 대비해서 강제로 스크롤
     try {
       const computed = window.getComputedStyle(el);
-      const lineHeight =
-        parseFloat(computed.lineHeight || '0') || 20; // 기본값 20px 정도로
+      const lineHeight = parseFloat(computed.lineHeight || '0') || 20;
       const targetScrollTop =
         lineHeight * (selectedLineIndex - 1) - el.clientHeight / 2;
       el.scrollTop = Math.max(0, targetScrollTop);
@@ -291,12 +340,10 @@ export function WordEditPage() {
   }
 
   const isSimple = editorMode === EditorMode.Simple;
+  const isOwnerOnly = readAccess === UserLevel.Owner;
 
   return (
-    <div
-      className="container py-4"
-      style={{ minHeight: '100vh' }}
-    >
+    <div className="container py-4" style={{ minHeight: '100vh' }}>
       {/* 상단 바 */}
       <div className="d-flex justify-content-between align-items-center mb-3">
         <div className="d-flex gap-2">
@@ -306,68 +353,81 @@ export function WordEditPage() {
           <button className="btn btn-success" onClick={handleSave}>
             변경
           </button>
-          <button className="btn btn-secondary" onClick={handleRandom}>
-            랜덤배치
-          </button>
         </div>
 
-        <div className="d-flex align-items-center gap-2">
-          {/* 간편 / 고급 에디터 토글 */}
-          <div className="btn-group me-2">
-            <button
-              className={`btn btn-sm ${
-                isSimple ? 'btn-primary' : 'btn-outline-primary'
-              }`}
-              onClick={() => {
-                // 고급 → 간편: 현재 커서 위치 기준으로 선택된 단어 결정
-                if (!isSimple && advancedTextareaRef.current) {
-                  const el = advancedTextareaRef.current;
-                  const caret = el.selectionStart ?? 0;
-                  const before = text.slice(0, caret);
-                  const lineIndex =
-                    before.split(/\r?\n/).length - 1; // 0-based
+        {/* 오른쪽 햄버거 메뉴 */}
+        <div className="dropdown">
+          <button
+            className="btn btn-outline-light"
+            type="button"
+            data-bs-toggle="dropdown"
+            aria-expanded="false"
+          >
+            ☰
+          </button>
+          <ul className="dropdown-menu dropdown-menu-end dropdown-menu-dark">
+            {/* 에디터 모드 토글 */}
+            {isSimple ? (
+              <li>
+                <button
+                  className="dropdown-item"
+                  type="button"
+                  onClick={switchToAdvancedEditor}
+                >
+                  고급 에디터로 변경
+                </button>
+              </li>
+            ) : (
+              <li>
+                <button
+                  className="dropdown-item"
+                  type="button"
+                  onClick={switchToSimpleEditor}
+                >
+                  간편 에디터로 변경
+                </button>
+              </li>
+            )}
 
-                  setSelectedLineIndex(lineIndex);
+            {/* 공개 범위 토글 */}
+            <li>
+              <button
+                className="dropdown-item"
+                type="button"
+                onClick={toggleReadAccess}
+              >
+                {isOwnerOnly ? '전체공개로 전환' : '비공개로 전환'}
+              </button>
+            </li>
 
-                  // 이 줄이 있는 페이지로 이동
-                  const idx = simpleItems.findIndex(
-                    item => item.lineIndex === lineIndex,
-                  );
-                  if (idx !== -1) {
-                    const newPageIndex = Math.floor(idx / pageSize);
-                    setPageIndex(newPageIndex);
-                  }
-                }
+            {/* 단어 랜덤 섞기 */}
+            <li>
+              <button
+                className="dropdown-item"
+                type="button"
+                onClick={handleRandom}
+              >
+                단어 랜덤섞기
+              </button>
+            </li>
 
-                setEditorMode(EditorMode.Simple);
-              }}
-            >
-              간편 에디터
-            </button>
+            <li>
+              <hr className="dropdown-divider" />
+            </li>
 
-            <button
-              className={`btn btn-sm ${
-                !isSimple ? 'btn-primary' : 'btn-outline-primary'
-              }`}
-              onClick={() => {
-                setEditorMode(EditorMode.Advanced);
-              }}
-            >
-              고급 에디터
-            </button>
-          </div>
-
-          {/* 오른쪽에 로그아웃 버튼 */}
-          <LogoutButton />
+            {/* 로그아웃 */}
+            <li>
+              <button
+                className="dropdown-item text-danger"
+                type="button"
+                onClick={handleLogout}
+              >
+                로그아웃
+              </button>
+            </li>
+          </ul>
         </div>
       </div>
-
-      {/* 에러 메시지 */}
-      {error && (
-        <div className="alert alert-danger py-2">
-          {error}
-        </div>
-      )}
 
       {/* 본문 */}
       {isSimple ? (
@@ -414,7 +474,6 @@ export function WordEditPage() {
           {/* 단어 리스트 (페이지 단위) */}
           <ul
             className="list-group"
-            // ✅ 불릿(점) 제거
             style={{ listStyle: 'none', paddingLeft: 0, marginBottom: 0 }}
           >
             {pagedItems.map(item => {
@@ -443,35 +502,37 @@ export function WordEditPage() {
             })}
             {simpleItems.length === 0 && (
               <li className="list-group-item bg-black text-secondary">
-                유효한 단어 행이 없습니다. 고급 에디터에서 포맷을 수정해주세요.
+                새로운 단어를 추가해주세요
               </li>
             )}
           </ul>
         </>
       ) : (
-        // ✅ 고급 에디터: 브라우저 높이에 맞춰 크게 + 커서 빨간색
         <textarea
           ref={advancedTextareaRef}
           className="form-control bg-black text-light"
           style={{
             height: 'calc(100vh - 200px)',
             minHeight: '50vh',
-            caretColor: 'red', // 🔴 커서 색
-            whiteSpace: 'pre',     // 🔴 자동 줄바꿈 막기
-            overflowX: 'auto',     // 🔴 가로 스크롤 생기게
+            caretColor: 'red',
+            whiteSpace: 'pre',
+            overflowX: 'auto',
           }}
           value={text}
           onChange={e => setText(e.target.value)}
         />
       )}
 
-      {/* 모달 (간단한 Bootstrap 스타일 대체) */}
+      {/* 모달 */}
       {modalOpen && (
         <div
           className="position-fixed top-0 start-0 w-100 h-100 d-flex justify-content-center align-items-center"
           style={{ backgroundColor: 'rgba(0,0,0,0.6)', zIndex: 1050 }}
         >
-          <div className="bg-dark text-light p-3 rounded" style={{ minWidth: 320 }}>
+          <div
+            className="bg-dark text-light p-3 rounded"
+            style={{ minWidth: 320 }}
+          >
             <h5 className="mb-3">
               {editorModalMode === EditorModalMode.Add ? '단어 추가' : '단어 수정'}
             </h5>
@@ -498,10 +559,7 @@ export function WordEditPage() {
               <button className="btn btn-secondary btn-sm" onClick={closeModal}>
                 취소
               </button>
-              <button
-                className="btn btn-primary btn-sm"
-                onClick={handleModalConfirm}
-              >
+              <button className="btn btn-primary btn-sm" onClick={handleModalConfirm}>
                 확인
               </button>
             </div>

@@ -1,12 +1,25 @@
 rules_version = '2';
-
-// Craft rules based on data in your Firestore database
-// allow write: if firestore.get(
-//    /databases/(default)/documents/users/$(request.auth.uid)).data.isAdmin;
 service firebase.storage {
   match /b/{bucket}/o {
     match /{allPaths=**} {
       allow read, write: if false;
+    }
+
+    match /voca/{env}/users/{userId}/wordbooks/{fileName} {
+
+      function isSignedIn() {
+        return request.auth != null;
+      }
+
+      function isOwner() {
+        return isSignedIn() && request.auth.uid == userId;
+      }
+
+      allow write: if isOwner();
+
+      allow read: if
+        isOwner() ||
+        resource.metadata.readAccess == "Public";
     }
   }
 }

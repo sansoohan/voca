@@ -1,6 +1,18 @@
 {
   "rules": {
     ".read": false,
-    ".write": false
+    ".write": false,
+    "voca": {
+      "$env": {
+        "users": {
+          "$uid": {
+            "bookmarks": {
+              ".read": "auth != null && auth.uid === $uid",
+              ".write": "auth != null && auth.uid === $uid"
+            }
+          }
+        }
+      }
+    }
   }
 }

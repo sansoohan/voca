@@ -1,7 +1,7 @@
 // utils/words.ts
-import type { PageSize } from '~/types/editor';
-import { nowIso8601Format, isParsableDate } from './date';
-import { allowedPageSizes } from '~/constants/editor';
+import type { PageSize, SimpleItem } from '~/types/editor';
+import { allowedPageSizes, SEP } from '~/constants/editor';
+import { nowIso8601Format, isParsableDate } from '~/utils/date';
 
 export interface WordLine {
   word: string;
@@ -109,5 +109,35 @@ export function paginate<T>(
     safePageIndex,
     pageStart,
     pagedItems,
+  };
+}
+
+// 한 줄을 파싱해서 단어/링크만 뽑아보고, 잘못된 포맷이면 null
+export function parseLineForSimple(line: string, index: number): SimpleItem | null {
+  const trimmed = line.trim();
+  if (!trimmed) return null;
+
+  const parts = trimmed.split(SEP);
+
+  // 허용 필드 수: 1~4
+  if (parts.length < 1 || parts.length > 4) {
+    return null;
+  }
+
+  const word = parts[0]?.trim();
+  if (!word) return null;
+
+  const link = (parts[1]?.trim() || '') || null;
+  const createdAtRaw = (parts[2]?.trim() || '') || null;
+
+  // 작성시간이 있다면 유효해야 함
+  if (createdAtRaw && !isParsableDate(createdAtRaw)) {
+    return null;
+  }
+
+  return {
+    lineIndex: index,
+    word,
+    link,
   };
 }

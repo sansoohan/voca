@@ -1,23 +1,34 @@
 // WordListPage.tsx
 import { useEffect, useState, useRef } from 'react';
 import { useParams, useNavigate, Link, generatePath } from 'react-router-dom';
-import { firestore, auth, VITE_VOCA_ENV } from '~/constants/firebase';
-import { doc, getDoc } from 'firebase/firestore';
+import { ref as storageRef, getDownloadURL } from 'firebase/storage';
+import { ref as rtdbRef, onValue, push, set as rtdbSet, onDisconnect } from 'firebase/database';
+import { auth, VITE_VOCA_ENV, storage, database } from '~/constants/firebase';
 import { onAuthStateChanged } from 'firebase/auth';
 import { LogoutButton } from '~/components/LogoutButton';
-import type { UserDoc } from '~/types/user';
 import { ROUTE_SIGN_IN, ROUTE_USER_WORDS_EDIT } from '~/constants/routes';
 import type { PageSize } from '~/types/editor';
 import { computeInitialPageSize, paginate } from '~/utils/editor';
 import { PaginationControls } from '~/components/PaginationControls';
 
+function getDefaultWordbookPath(uid: string) {
+  return `voca/${VITE_VOCA_ENV}/users/${uid}/wordbooks/default.txt`;
+}
+
+type Bookmark = {
+  id: string;
+  wordIndex: number;
+  updatedAt: number;
+};
+
 export function WordListPage() {
   const { uid } = useParams<{ uid: string }>();
   const nav = useNavigate();
 
-  const [userDoc, setUserDoc] = useState<UserDoc | undefined>(undefined);
+  const [text, setText] = useState<string>('');
   const [currentUserUid, setCurrentUserUid] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState<boolean>(true);
 
   const [selectedLink, setSelectedLink] = useState<string | null>(null);
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
@@ -30,9 +41,16 @@ export function WordListPage() {
   const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
   const [mobileMode, setMobileMode] = useState(false); // 모바일일 때 iframe만 보기 모드
 
-  // ✅ 단어 리스트 페이지네이션 상태
+  // 단어 리스트 페이지네이션 상태
   const [pageSize, setPageSize] = useState<PageSize>(computeInitialPageSize(120));
   const [pageIndex, setPageIndex] = useState(0); // 0-based
+
+  // 북마크 관련 상태 (database)
+  const [bookmarkWordIndex, setBookmarkWordIndex] = useState<number | null>(null);
+  const [bookmarkKey, setBookmarkKey] = useState<string | null>(null);
+  const [initialBookmarkApplied, setInitialBookmarkApplied] = useState(false);
+
+  const wordbookPath = uid ? getDefaultWordbookPath(uid) : null;
 
   // Resize detection
   useEffect(() => {
@@ -46,32 +64,40 @@ export function WordListPage() {
 
   // Auth
   useEffect(() => {
-    const unsub = onAuthStateChanged(auth, (user) => {
+    const unsub = onAuthStateChanged(auth, user => {
       setCurrentUserUid(user?.uid ?? null);
     });
     return () => unsub();
   }, []);
 
-  // Load Firestore doc
+  // Storage에서 wordbook 텍스트 로드
   useEffect(() => {
     if (!uid) return;
-    const fetchData = async () => {
+
+    const fetchText = async () => {
+      setLoading(true);
       try {
-        const snap = await getDoc(doc(firestore, 'voca', VITE_VOCA_ENV, 'users', uid));
-        if (!snap.exists()) {
-          setError('존재하지 않는 사용자입니다.');
-          return;
-        }
-        setUserDoc(snap.data() as UserDoc);
+        const path = getDefaultWordbookPath(uid);
+        const fileRef = storageRef(storage, path);
+        const url = await getDownloadURL(fileRef);
+        const res = await fetch(url);
+        const txt = await res.text();
+        setText(txt ?? '');
+        setError(null);
       } catch (e: any) {
-        if (e.code === 'permission-denied') {
-          setError('페이지에 접근할 수 없습니다');
+        console.error(e);
+        if (e.code === 'storage/object-not-found') {
+          setError('해당 단어장을 찾을 수 없습니다.');
         } else {
-          setError('데이터를 불러오는 중 오류가 발생했습니다.');
+          setError('단어장을 불러오는 중 오류가 발생했습니다.');
         }
+        setText('');
+      } finally {
+        setLoading(false);
       }
     };
-    fetchData();
+
+    fetchText();
   }, [uid]);
 
   // ESC → iframe 닫기
@@ -105,7 +131,9 @@ export function WordListPage() {
         setLeftWidth(newWidth);
       }
     };
-    const onMouseUp = () => (dragging = false);
+    const onMouseUp = () => {
+      dragging = false;
+    };
 
     divider.addEventListener('mousedown', onMouseDown);
     window.addEventListener('mousemove', onMouseMove);
@@ -118,39 +146,163 @@ export function WordListPage() {
     };
   }, []);
 
+  // 🔹 database 북마크 전체 감시 (현재 로그인한 유저 기준)
+  useEffect(() => {
+    if (!currentUserUid || !uid) return;
+
+    const viewerUid = currentUserUid;
+    // 🔸 앞에 슬래시 빼는 걸 추천 (실제 경로는 voca/... 로 가게)
+    const basePath = `voca/${VITE_VOCA_ENV}/users/${viewerUid}/bookmarks`;
+    const dbRef = rtdbRef(database, basePath);
+
+    const unsub = onValue(
+      dbRef,
+      snap => {
+        // ✅ 데이터 없어도 이 콜백은 한 번은 무조건 호출돼야 한다.
+        const val = snap.val() as Record<string, Bookmark> | null;
+
+        // 북마크 없으면 그냥 상태 비우기
+        if (!val) {
+          setBookmarkWordIndex(null);
+          setBookmarkKey(null);
+          return;
+        }
+
+        const targetPath = getDefaultWordbookPath(uid);
+
+        let best: { key: string; data: Bookmark } | null = null;
+        for (const [key, data] of Object.entries(val)) {
+          if (!data || data.id !== targetPath) continue;
+          if (!best || (data.updatedAt ?? 0) > (best.data.updatedAt ?? 0)) {
+            best = { key, data };
+          }
+        }
+
+        if (best) {
+          setBookmarkKey(best.key);
+          setBookmarkWordIndex(best.data.wordIndex);
+        } else {
+          setBookmarkKey(null);
+          setBookmarkWordIndex(null);
+        }
+      },
+      error => {
+        // 🔥 권한 문제 / 네트워크 문제 등을 여기서 바로 확인
+        console.error('[RTDB] onValue error', error);
+      },
+    );
+
+    return () => {
+      unsub();
+      setBookmarkWordIndex(null);
+      setBookmarkKey(null);
+      setInitialBookmarkApplied(false);
+    };
+  }, [currentUserUid, uid]);
+
+
+
+  // 🔹 초기 로딩 시: 북마크 wordIndex → pageIndex 반영 (한 번만)
+  useEffect(() => {
+    if (initialBookmarkApplied) return;
+    if (!text) return;
+    if (bookmarkWordIndex == null) return;
+
+    const allLines = text
+      .split('\n')
+      .filter((l: string) => l.trim() !== '');
+
+    if (allLines.length === 0) return;
+
+    let idx = bookmarkWordIndex;
+    if (idx < 0) idx = 0;
+    if (idx >= allLines.length) idx = allLines.length - 1;
+
+    const newPageIndex = Math.floor(idx / pageSize);
+    setPageIndex(newPageIndex);
+    setInitialBookmarkApplied(true);
+  }, [text, bookmarkWordIndex, pageSize, initialBookmarkApplied]);
+
+  // 🔹 페이지 바뀔 때마다 RTDB에 북마크 저장 + onDisconnect 갱신
+  useEffect(() => {
+    if (!currentUserUid || !uid || !wordbookPath) {
+      return;
+    }
+    if (!text) return; // 텍스트 없으면 스킵
+
+    const allLines = text
+      .split('\n')
+      .filter((l: string) => l.trim() !== '');
+
+    if (allLines.length === 0) return;
+
+    const viewerUid = currentUserUid;
+    const basePath = `voca/${VITE_VOCA_ENV}/users/${viewerUid}/bookmarks`;
+    const baseRef = rtdbRef(database, basePath);
+
+    const wordIndex = pageIndex * pageSize;
+
+    let key = bookmarkKey;
+    if (!key) {
+      const newRef = push(baseRef); // 랜덤 bookmarkId 생성
+      key = newRef.key!;
+      setBookmarkKey(key);
+    }
+
+    const bkRef = rtdbRef(database, `${basePath}/${key}`);
+    const bookmark: Bookmark = {
+      id: wordbookPath,
+      wordIndex,
+      updatedAt: Date.now(),
+    };
+
+    rtdbSet(bkRef, bookmark).catch(err => {
+      console.error('[RTDB] write error', err);
+    });
+
+    onDisconnect(bkRef).set(bookmark).catch(err => {
+      console.error('[RTDB] onDisconnect error', err);
+    });
+  }, [pageIndex, pageSize, text, currentUserUid, uid, wordbookPath, bookmarkKey]);
+
   if (error) {
     return (
-      <div className='container py-5'>
+      <div className="container py-5">
         <p>{error}</p>
-        <Link to={ROUTE_SIGN_IN} className='link-light'>
+        <Link to={ROUTE_SIGN_IN} className="link-light">
           로그인 페이지로 이동
         </Link>
       </div>
     );
   }
 
-  if (!userDoc) {
+  if (loading) {
     return (
-      <div className='container py-5'>
+      <div className="container py-5">
         <p>로딩 중...</p>
       </div>
     );
   }
 
   const canEdit = currentUserUid === uid;
-  const lines = userDoc.words.split('\n').filter((l: string) => l.trim() !== '');
+  const lines = text
+    .split('\n')
+    .filter((l: string) => l.trim() !== '');
 
   const {
     totalPages,
     safePageIndex,
     pageStart,
-    pagedItems: pagedLines,   // 이름만 바꿔서 사용
+    pagedItems: pagedLines,
   } = paginate(lines, pageSize, pageIndex);
 
   return (
-    <div className='container-fluid py-3' style={{ height: '100vh', overflow: 'hidden' }}>
+    <div
+      className="container-fluid py-3"
+      style={{ height: '100vh', overflow: 'hidden' }}
+    >
       {/* --- 상단 바: 왼쪽 페이지네이션, 오른쪽 수정/로그아웃 --- */}
-      <div className='d-flex justify-content-between align-items-center mb-3'>
+      <div className="d-flex justify-content-between align-items-center mb-3">
         <PaginationControls
           pageSize={pageSize}
           pageIndex={safePageIndex}
@@ -165,8 +317,10 @@ export function WordListPage() {
         <div className="d-flex align-items-center gap-2">
           {canEdit && (
             <button
-              className='btn btn-primary'
-              onClick={() => nav(generatePath(ROUTE_USER_WORDS_EDIT, { uid }))}
+              className="btn btn-primary"
+              onClick={() =>
+                nav(generatePath(ROUTE_USER_WORDS_EDIT, { uid }))
+              }
             >
               수정
             </button>
@@ -176,11 +330,11 @@ export function WordListPage() {
       </div>
 
       {/* --- 메인 2-컬럼 레이아웃 (모바일 분기 포함) --- */}
-      <div className='d-flex' style={{ height: 'calc(100% - 80px)' }}>
+      <div className="d-flex" style={{ height: 'calc(100% - 80px)' }}>
         {/* LEFT (단어 목록) */}
         {!mobileMode && (
           <div
-            className='overflow-auto bg-black'
+            className="overflow-auto bg-black"
             style={{
               width: leftWidth,
               borderRight: '1px solid #555',
@@ -188,7 +342,7 @@ export function WordListPage() {
             }}
           >
             <ul
-              className='list-group list-group-flush'
+              className="list-group list-group-flush"
               style={{ listStyle: 'none', paddingLeft: 0, marginBottom: 0 }}
             >
               {pagedLines.map((line: string, localIdx: number) => {
@@ -238,12 +392,12 @@ export function WordListPage() {
                       }
                     }}
                   >
-                    <span className='fw-bold'>{word}</span>
+                    <span className="fw-bold">{word}</span>
                   </li>
                 );
               })}
               {lines.length === 0 && (
-                <li className='list-group-item bg-black text-secondary'>
+                <li className="list-group-item bg-black text-secondary">
                   단어가 없습니다. 에디터에서 단어를 추가해 주세요.
                 </li>
               )}
@@ -264,15 +418,15 @@ export function WordListPage() {
         )}
 
         {/* RIGHT (iframe viewer) */}
-        <div className='flex-grow-1 position-relative'>
+        <div className="flex-grow-1 position-relative">
           {selectedLink ? (
             <>
               {iframeLoading && (
                 <div
-                  className='position-absolute top-50 start-50 translate-middle text-light'
+                  className="position-absolute top-50 start-50 translate-middle text-light"
                   style={{ zIndex: 10 }}
                 >
-                  <div className='spinner-border text-info' />
+                  <div className="spinner-border text-info" />
                 </div>
               )}
 
@@ -290,7 +444,7 @@ export function WordListPage() {
               />
             </>
           ) : (
-            <div className='text-secondary d-flex justify-content-center align-items-center h-100'>
+            <div className="text-secondary d-flex justify-content-center align-items-center h-100">
               단어를 클릭하면 오른쪽에 치트시트가 표시됩니다.
             </div>
           )}

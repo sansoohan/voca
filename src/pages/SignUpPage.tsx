@@ -1,11 +1,10 @@
 // pages/SignUpPage.tsx
 import { useState } from 'react';
-import { auth, firestore, VITE_VOCA_ENV } from '~/constants/firebase';
 import { createUserWithEmailAndPassword } from 'firebase/auth';
-import { doc, setDoc } from 'firebase/firestore';
 import { useNavigate, Link, generatePath } from 'react-router-dom';
 import { ROUTE_SIGN_IN, ROUTE_USER_WORDS } from '~/constants/routes';
-import { newUserData } from '~/constants/newUser';
+import { auth } from '~/constants/firebase';
+import { ensureDefaultWordbook } from '~/utils/storage';
 
 export function SignUpPage() {
   const nav = useNavigate();
@@ -18,10 +17,12 @@ export function SignUpPage() {
       const cred = await createUserWithEmailAndPassword(auth, email, pw);
       const uid = cred.user.uid;
 
-      await setDoc(doc(firestore, 'voca', VITE_VOCA_ENV, 'users', uid), newUserData);
+      // 🔹 Firestore 문서 없이, Storage에 기본 단어장만 생성
+      await ensureDefaultWordbook(uid);
 
       nav(generatePath(ROUTE_USER_WORDS, { uid }));
     } catch (e: any) {
+      console.error(e);
       setError(e.message ?? '회원가입 실패');
     }
   };
