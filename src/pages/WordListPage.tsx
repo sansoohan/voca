@@ -1,19 +1,17 @@
 // WordListPage.tsx
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState, type JSX } from 'react';
 import { useParams, useNavigate, Link, generatePath } from 'react-router-dom';
 import { ref as storageRef, getDownloadURL } from 'firebase/storage';
 import { ref as rtdbRef, onValue, push, set as rtdbSet, onDisconnect } from 'firebase/database';
-import { auth, VITE_VOCA_ENV, storage, database } from '~/constants/firebase';
 import { onAuthStateChanged } from 'firebase/auth';
 import { LogoutButton } from '~/components/LogoutButton';
+import { auth, VITE_VOCA_ENV, storage, database } from '~/constants/firebase';
 import { ROUTE_SIGN_IN, ROUTE_USER_WORDS_EDIT } from '~/constants/routes';
 import type { PageSize } from '~/types/editor';
 import { computeInitialPageSize, paginate } from '~/utils/editor';
 import { PaginationControls } from '~/components/PaginationControls';
-
-function getDefaultWordbookPath(uid: string) {
-  return `voca/${VITE_VOCA_ENV}/users/${uid}/wordbooks/default.txt`;
-}
+import { SEP } from '~/constants/editor';
+import { getDefaultWordbookPath } from '~/utils/storage';
 
 type Bookmark = {
   id: string;
@@ -30,37 +28,16 @@ export function WordListPage() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
 
-  const [selectedLink, setSelectedLink] = useState<string | null>(null);
-  const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
-
-  const [iframeLoading, setIframeLoading] = useState(false);
-
-  const [leftWidth, setLeftWidth] = useState(280); // 초기 폭(px)
-  const dividerRef = useRef<HTMLDivElement | null>(null);
-
-  const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
-  const [mobileMode, setMobileMode] = useState(false); // 모바일일 때 iframe만 보기 모드
-
-  // 단어 리스트 페이지네이션 상태
-  const [pageSize, setPageSize] = useState<PageSize>(computeInitialPageSize(120));
+  // 한 페이지에 최대 단어 수
+  const [pageSize, setPageSize] = useState<PageSize>(computeInitialPageSize(120, 23.4));
   const [pageIndex, setPageIndex] = useState(0); // 0-based
 
-  // 북마크 관련 상태 (database)
+  // 북마크 상태
   const [bookmarkWordIndex, setBookmarkWordIndex] = useState<number | null>(null);
   const [bookmarkKey, setBookmarkKey] = useState<string | null>(null);
   const [initialBookmarkApplied, setInitialBookmarkApplied] = useState(false);
 
   const wordbookPath = uid ? getDefaultWordbookPath(uid) : null;
-
-  // Resize detection
-  useEffect(() => {
-    const onResize = () => {
-      setIsMobile(window.innerWidth < 768);
-      if (window.innerWidth >= 768) setMobileMode(false);
-    };
-    window.addEventListener('resize', onResize);
-    return () => window.removeEventListener('resize', onResize);
-  }, []);
 
   // Auth
   useEffect(() => {
@@ -100,68 +77,18 @@ export function WordListPage() {
     fetchText();
   }, [uid]);
 
-  // ESC → iframe 닫기
-  useEffect(() => {
-    const handleKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        setSelectedLink(null);
-        setSelectedIndex(null);
-        setMobileMode(false);
-      }
-    };
-    window.addEventListener('keydown', handleKey);
-    return () => window.removeEventListener('keydown', handleKey);
-  }, []);
-
-  // Drag to resize (left panel)
-  useEffect(() => {
-    const divider = dividerRef.current;
-    if (!divider) return;
-
-    let dragging = false;
-
-    const onMouseDown = () => {
-      dragging = true;
-    };
-    const onMouseMove = (e: MouseEvent) => {
-      if (!dragging) return;
-
-      const newWidth = e.clientX;
-      if (newWidth > 150 && newWidth < window.innerWidth - 200) {
-        setLeftWidth(newWidth);
-      }
-    };
-    const onMouseUp = () => {
-      dragging = false;
-    };
-
-    divider.addEventListener('mousedown', onMouseDown);
-    window.addEventListener('mousemove', onMouseMove);
-    window.addEventListener('mouseup', onMouseUp);
-
-    return () => {
-      divider.removeEventListener('mousedown', onMouseDown);
-      window.removeEventListener('mousemove', onMouseMove);
-      window.removeEventListener('mouseup', onMouseUp);
-    };
-  }, []);
-
-  // 🔹 database 북마크 전체 감시 (현재 로그인한 유저 기준)
+  // RTDB 북마크 감시
   useEffect(() => {
     if (!currentUserUid || !uid) return;
 
     const viewerUid = currentUserUid;
-    // 🔸 앞에 슬래시 빼는 걸 추천 (실제 경로는 voca/... 로 가게)
     const basePath = `voca/${VITE_VOCA_ENV}/users/${viewerUid}/bookmarks`;
     const dbRef = rtdbRef(database, basePath);
 
     const unsub = onValue(
       dbRef,
       snap => {
-        // ✅ 데이터 없어도 이 콜백은 한 번은 무조건 호출돼야 한다.
         const val = snap.val() as Record<string, Bookmark> | null;
-
-        // 북마크 없으면 그냥 상태 비우기
         if (!val) {
           setBookmarkWordIndex(null);
           setBookmarkKey(null);
@@ -187,7 +114,6 @@ export function WordListPage() {
         }
       },
       error => {
-        // 🔥 권한 문제 / 네트워크 문제 등을 여기서 바로 확인
         console.error('[RTDB] onValue error', error);
       },
     );
@@ -200,18 +126,13 @@ export function WordListPage() {
     };
   }, [currentUserUid, uid]);
 
-
-
-  // 🔹 초기 로딩 시: 북마크 wordIndex → pageIndex 반영 (한 번만)
+  // 북마크 → 초기 pageIndex 반영
   useEffect(() => {
     if (initialBookmarkApplied) return;
     if (!text) return;
     if (bookmarkWordIndex == null) return;
 
-    const allLines = text
-      .split('\n')
-      .filter((l: string) => l.trim() !== '');
-
+    const allLines = text.split('\n').filter(l => l.trim() !== '');
     if (allLines.length === 0) return;
 
     let idx = bookmarkWordIndex;
@@ -223,17 +144,12 @@ export function WordListPage() {
     setInitialBookmarkApplied(true);
   }, [text, bookmarkWordIndex, pageSize, initialBookmarkApplied]);
 
-  // 🔹 페이지 바뀔 때마다 RTDB에 북마크 저장 + onDisconnect 갱신
+  // 페이지 바뀔 때마다 북마크 저장
   useEffect(() => {
-    if (!currentUserUid || !uid || !wordbookPath) {
-      return;
-    }
-    if (!text) return; // 텍스트 없으면 스킵
+    if (!currentUserUid || !uid || !wordbookPath) return;
+    if (!text) return;
 
-    const allLines = text
-      .split('\n')
-      .filter((l: string) => l.trim() !== '');
-
+    const allLines = text.split('\n').filter(l => l.trim() !== '');
     if (allLines.length === 0) return;
 
     const viewerUid = currentUserUid;
@@ -244,7 +160,7 @@ export function WordListPage() {
 
     let key = bookmarkKey;
     if (!key) {
-      const newRef = push(baseRef); // 랜덤 bookmarkId 생성
+      const newRef = push(baseRef);
       key = newRef.key!;
       setBookmarkKey(key);
     }
@@ -260,9 +176,11 @@ export function WordListPage() {
       console.error('[RTDB] write error', err);
     });
 
-    onDisconnect(bkRef).set(bookmark).catch(err => {
-      console.error('[RTDB] onDisconnect error', err);
-    });
+    onDisconnect(bkRef)
+      .set(bookmark)
+      .catch(err => {
+        console.error('[RTDB] onDisconnect error', err);
+      });
   }, [pageIndex, pageSize, text, currentUserUid, uid, wordbookPath, bookmarkKey]);
 
   if (error) {
@@ -285,9 +203,7 @@ export function WordListPage() {
   }
 
   const canEdit = currentUserUid === uid;
-  const lines = text
-    .split('\n')
-    .filter((l: string) => l.trim() !== '');
+  const lines = text.split('\n').filter(l => l.trim() !== '');
 
   const {
     totalPages,
@@ -296,13 +212,215 @@ export function WordListPage() {
     pagedItems: pagedLines,
   } = paginate(lines, pageSize, pageIndex);
 
+  const hasPages = totalPages > 0;
+  const canCycle = totalPages > 1;
+  const currentPage = hasPages ? safePageIndex + 1 : 0;
+
+  const prevPageNumber = hasPages
+    ? canCycle
+      ? currentPage === 1
+        ? totalPages
+        : currentPage - 1
+      : currentPage
+    : 0;
+
+  const nextPageNumber = hasPages
+    ? canCycle
+      ? currentPage === totalPages
+        ? 1
+        : currentPage + 1
+      : currentPage
+    : 0;
+
+  const goPrevPage = () => {
+    if (!canCycle) return;
+    setPageIndex(prev => (prev > 0 ? prev - 1 : totalPages - 1));
+  };
+
+  const goNextPage = () => {
+    if (!canCycle) return;
+    setPageIndex(prev => (prev < totalPages - 1 ? prev + 1 : 0));
+  };
+
   return (
     <div
-      className="container-fluid py-3"
-      style={{ height: '100vh', overflow: 'hidden' }}
+      className="container"
+      style={{
+        maxWidth: 1080,
+        minHeight: '100vh',
+        display: 'flex',
+        flexDirection: 'column',
+        paddingTop: '0.75rem',
+        paddingBottom: '0.75rem',
+      }}
     >
-      {/* --- 상단 바: 왼쪽 페이지네이션, 오른쪽 수정/로그아웃 --- */}
-      <div className="d-flex justify-content-between align-items-center mb-3">
+      {/* 최상단: 수정 버튼 중앙, 로그아웃 우상단 absolute */}
+      <div
+        className="position-relative mb-3"
+        style={{ minHeight: 32 }}
+      >
+        {/* 중앙 수정 버튼 */}
+        <div className="d-flex justify-content-center">
+          {canEdit && (
+            <button
+              className="btn btn-primary btn-sm"
+              onClick={() => nav(generatePath(ROUTE_USER_WORDS_EDIT, { uid }))}
+            >
+              수정
+            </button>
+          )}
+        </div>
+
+        {/* 우상단 로그아웃 (absolute) */}
+        <div
+          className="position-absolute"
+          style={{ top: 0, right: 0 }}
+        >
+          <LogoutButton />
+        </div>
+      </div>
+
+      {/* 중앙: 좌/우 페이지 네비 + 단어 리스트 */}
+      <div className="d-flex mt-2 mb-3">
+        {/* 왼쪽 여백 = 이전 페이지 */}
+        <div
+          onClick={goPrevPage}
+          className="d-flex align-items-center justify-content-center"
+          style={{
+            flex: 1,
+            cursor: canCycle ? 'pointer' : 'default',
+            fontSize: '1.4rem',
+            lineHeight: 1,
+            opacity: canCycle ? 0.35 : 0.15,
+            color: '#bbb',
+            userSelect: 'none',
+          }}
+        >
+          {hasPages ? prevPageNumber : ''}
+        </div>
+
+        {/* 중앙 단어 리스트 박스 (세로폭 = 실제 단어 개수만큼) */}
+        <div
+          className="bg-black"
+          style={{
+            flexShrink: 0,
+            maxWidth: 720,
+            minWidth: 280,
+            border: '1px solid #444',
+            borderRadius: 6,
+            padding: 4,
+          }}
+        >
+          <ul
+            style={{
+              listStyle: 'none',
+              paddingLeft: 0,
+              marginBottom: 0,
+            }}
+          >
+            {(() => {
+              // 단어가 전혀 없으면 안내문만 출력
+              if (lines.length === 0) {
+                return (
+                  <li
+                    style={{ padding: '4px 6px', fontSize: '0.9rem' }}
+                    className="text-secondary"
+                  >
+                    단어가 없습니다. 에디터에서 단어를 추가해 주세요.
+                  </li>
+                );
+              }
+
+              const items: JSX.Element[] = [];
+
+              const isLastPage =
+                totalPages > 0 && safePageIndex === totalPages - 1;
+              const realCount = pagedLines.length;
+              const padCount = isLastPage
+                ? Math.max(0, pageSize - realCount)
+                : 0;
+
+              // 실제 단어 라인
+              pagedLines.forEach((line: string, localIdx: number) => {
+                const idx = pageStart + localIdx;
+                const parts = line.split(SEP);
+                const word = parts[0]?.trim();
+                const link = parts[1]?.trim();
+                const hasLink = !!link;
+
+                items.push(
+                  <li
+                    key={idx}
+                    style={{
+                      padding: '2px 6px',
+                      borderBottom: '1px solid #333',
+                      fontSize: '0.92rem',
+                      lineHeight: 1.25,
+                      whiteSpace: 'nowrap',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                    }}
+                  >
+                    {hasLink ? (
+                      <a
+                        href={link}
+                        className="text-decoration-none"
+                        style={{ color: '#f8f9fa' }}
+                      >
+                        <span className="fw-bold">{word}</span>
+                      </a>
+                    ) : (
+                      <span className="fw-bold text-light">{word}</span>
+                    )}
+                  </li>,
+                );
+              });
+
+              // 마지막 페이지면 빈 줄로 패딩해서 꽉 채우기
+              for (let i = 0; i < padCount; i++) {
+                items.push(
+                  <li
+                    key={`pad-${i}`}
+                    style={{
+                      padding: '2px 6px',
+                      borderBottom: '1px solid #333',
+                      fontSize: '0.92rem',
+                      lineHeight: 1.25,
+                      whiteSpace: 'nowrap',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      color: 'transparent',
+                    }}
+                  >·</li>
+                );
+              }
+
+
+              return items;
+            })()}
+          </ul>
+        </div>
+
+        {/* 오른쪽 여백 = 다음 페이지 */}
+        <div
+          onClick={goNextPage}
+          className="d-flex align-items-center justify-content-center"
+          style={{
+            flex: 1,
+            cursor: canCycle ? 'pointer' : 'default',
+            fontSize: '1.4rem',
+            lineHeight: 1,
+            opacity: canCycle ? 0.35 : 0.15,
+            color: '#bbb',
+            userSelect: 'none',
+          }}
+        >
+          {hasPages ? nextPageNumber : ''}
+        </div>
+      </div>
+
+      {/* 최하단: 페이지네이션 컨트롤 중앙 배치 */}
+      <div className="mt-auto pt-2 d-flex justify-content-center">
         <PaginationControls
           pageSize={pageSize}
           pageIndex={safePageIndex}
@@ -313,142 +431,6 @@ export function WordListPage() {
           }}
           onPageIndexChange={setPageIndex}
         />
-
-        <div className="d-flex align-items-center gap-2">
-          {canEdit && (
-            <button
-              className="btn btn-primary"
-              onClick={() =>
-                nav(generatePath(ROUTE_USER_WORDS_EDIT, { uid }))
-              }
-            >
-              수정
-            </button>
-          )}
-          <LogoutButton />
-        </div>
-      </div>
-
-      {/* --- 메인 2-컬럼 레이아웃 (모바일 분기 포함) --- */}
-      <div className="d-flex" style={{ height: 'calc(100% - 80px)' }}>
-        {/* LEFT (단어 목록) */}
-        {!mobileMode && (
-          <div
-            className="overflow-auto bg-black"
-            style={{
-              width: leftWidth,
-              borderRight: '1px solid #555',
-              paddingRight: 5,
-            }}
-          >
-            <ul
-              className="list-group list-group-flush"
-              style={{ listStyle: 'none', paddingLeft: 0, marginBottom: 0 }}
-            >
-              {pagedLines.map((line: string, localIdx: number) => {
-                const idx = pageStart + localIdx; // 원래 전체 인덱스
-                const parts = line.split('/|/');
-                const word = parts[0]?.trim();
-                const link = parts[1]?.trim();
-
-                const isSelected = selectedIndex === idx;
-
-                return (
-                  <li
-                    key={idx}
-                    className={`
-                      px-2 bg-black text-light border
-                      ${isSelected ? 'border-info' : 'border-secondary'}
-                    `}
-                    style={{
-                      cursor: link ? 'pointer' : 'default',
-                      backgroundColor: isSelected ? '#1d3557' : '#000',
-                    }}
-                    onClick={() => {
-                      if (!link) {
-                        setSelectedLink(null);
-                        setSelectedIndex(null);
-                        setMobileMode(false);
-                        return;
-                      }
-
-                      if (selectedIndex === idx) {
-                        setSelectedLink(null);
-                        setSelectedIndex(null);
-                        setMobileMode(false);
-                        return;
-                      }
-
-                      setSelectedIndex(idx);
-
-                      if (selectedLink !== link) {
-                        setIframeLoading(true);
-                      }
-
-                      setSelectedLink(link);
-
-                      if (isMobile) {
-                        setMobileMode(true);
-                      }
-                    }}
-                  >
-                    <span className="fw-bold">{word}</span>
-                  </li>
-                );
-              })}
-              {lines.length === 0 && (
-                <li className="list-group-item bg-black text-secondary">
-                  단어가 없습니다. 에디터에서 단어를 추가해 주세요.
-                </li>
-              )}
-            </ul>
-          </div>
-        )}
-
-        {/* Divider (drag handle) — 데스크탑에서만 */}
-        {!mobileMode && (
-          <div
-            ref={dividerRef}
-            style={{
-              width: 6,
-              cursor: 'col-resize',
-              background: '#444',
-            }}
-          ></div>
-        )}
-
-        {/* RIGHT (iframe viewer) */}
-        <div className="flex-grow-1 position-relative">
-          {selectedLink ? (
-            <>
-              {iframeLoading && (
-                <div
-                  className="position-absolute top-50 start-50 translate-middle text-light"
-                  style={{ zIndex: 10 }}
-                >
-                  <div className="spinner-border text-info" />
-                </div>
-              )}
-
-              <iframe
-                src={selectedLink}
-                onLoad={() => setIframeLoading(false)}
-                style={{
-                  width: '110%',
-                  height: '110%',
-                  transform: 'scale(0.9)',
-                  transformOrigin: '0 0',
-                  border: 'none',
-                  background: '#111',
-                }}
-              />
-            </>
-          ) : (
-            <div className="text-secondary d-flex justify-content-center align-items-center h-100">
-              단어를 클릭하면 오른쪽에 치트시트가 표시됩니다.
-            </div>
-          )}
-        </div>
       </div>
     </div>
   );

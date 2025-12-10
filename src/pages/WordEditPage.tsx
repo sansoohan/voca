@@ -38,7 +38,7 @@ export function WordEditPage() {
   const [selectedLineIndex, setSelectedLineIndex] = useState<number | null>(null);
 
   // 간편 에디터 페이지네이션 상태
-  const [pageSize, setPageSize] = useState<PageSize>(computeInitialPageSize(150));
+  const [pageSize, setPageSize] = useState<PageSize>(computeInitialPageSize(190, 23.4));
   const [pageIndex, setPageIndex] = useState(0); // 0-based
 
   const [modalOpen, setModalOpen] = useState(false);
@@ -471,43 +471,63 @@ export function WordEditPage() {
             onPageIndexChange={setPageIndex}
           />
 
-          {/* 단어 리스트 (페이지 단위) */}
+          {/* 단어 리스트 (페이지 단위) – WordListPage 스타일에 맞춤 */}
           <ul
-            className="list-group"
-            style={{ listStyle: 'none', paddingLeft: 0, marginBottom: 0 }}
+            style={{
+              listStyle: 'none',
+              paddingLeft: 0,
+              marginBottom: 0,
+            }}
           >
             {pagedItems.map(item => {
               const isSelected = item.lineIndex === selectedLineIndex;
+              const bg = isSelected ? '#1d3557' : '#000';
+
               return (
                 <li
                   key={item.lineIndex}
-                  className={`
-                    px-2 bg-black text-light border
-                    ${isSelected ? 'border-info' : 'border-secondary'}
-                  `}
-                  style={{
-                    cursor: 'default',
-                    backgroundColor: isSelected ? '#1d3557' : '#000',
-                  }}
                   onClick={() => handleSelectItem(item.lineIndex)}
+                  style={{
+                    padding: '2px 6px',          // 고밀도 패딩
+                    borderBottom: '1px solid #333',
+                    fontSize: '0.92rem',
+                    lineHeight: 1.25,
+                    whiteSpace: 'nowrap',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    backgroundColor: bg,        // 🔹 선택 시 색 채우기로 표시
+                    color: '#f8f9fa',
+                    cursor: 'pointer',
+                  }}
                 >
-                  <span>
-                    <span className="fw-bold me-2">{item.word}</span>
-                    {item.link && (
-                      <span className="text-info small">{item.link}</span>
-                    )}
-                  </span>
+                  <span className="fw-bold me-2">{item.word}</span>
+                  {item.link && (
+                    <span
+                      className="small"
+                      style={{ color: '#0dcaf0' }} // text-info 비슷한 색
+                    >
+                      {item.link}
+                    </span>
+                  )}
                 </li>
               );
             })}
+
             {simpleItems.length === 0 && (
-              <li className="list-group-item bg-black text-secondary">
+              <li
+                style={{
+                  padding: '4px 6px',
+                  fontSize: '0.9rem',
+                }}
+                className="text-secondary bg-black"
+              >
                 새로운 단어를 추가해주세요
               </li>
             )}
           </ul>
         </>
       ) : (
+        // 고급 에디터 그대로
         <textarea
           ref={advancedTextareaRef}
           className="form-control bg-black text-light"

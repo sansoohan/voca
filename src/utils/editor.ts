@@ -18,7 +18,7 @@ export function parseTextToWordLines(raw: string): WordLine[] {
     const trimmed = line.trim();
     if (!trimmed) continue; // 빈 줄 삭제
 
-    const parts = trimmed.split('/|/');
+    const parts = trimmed.split(SEP);
 
     // 1. 그 줄의 단어가 위 형태가 아니면 그 줄은 삭제
     // => 최소한 <단어>는 있어야 함.
@@ -56,7 +56,7 @@ export function wordLinesToText(lines: WordLine[]): string {
       const safeLink = link ?? '';
       const safeAdded = addedAt ?? '';
       const safeOrder = order ?? '';
-      return `${word}/|/${safeLink}/|/${safeAdded}/|/${safeOrder}`;
+      return `${word}${SEP}${safeLink}${SEP}${safeAdded}${SEP}${safeOrder}`;
     })
     .join('\n');
 }
@@ -76,11 +76,13 @@ export function shuffleLines(raw: string): string {
   return lines.join('\n');
 }
 
-export const computeInitialPageSize = (reservedForHeader: number): PageSize => {
+export const computeInitialPageSize = (
+  reservedForHeader: number,
+  approximateRowHeight: number,
+): PageSize => {
   const vh = window.innerHeight;
   const available = Math.max(0, vh - reservedForHeader);
 
-  const approximateRowHeight = 26;
   const approxCount = Math.max(5, Math.floor(available / approximateRowHeight));
 
   let best: PageSize = 10;

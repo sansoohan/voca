@@ -8,7 +8,7 @@ import { ROUTE_SIGN_IN } from '~/constants/routes';
 
 export function LogoutButton() {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
-  const navigate = useNavigate();
+  const nav = useNavigate();
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, user => {
@@ -20,7 +20,7 @@ export function LogoutButton() {
   const handleLogout = async () => {
     try {
       await signOut(auth);
-      navigate(ROUTE_SIGN_IN);
+      nav(ROUTE_SIGN_IN);
     } catch (e) {
       console.error('로그아웃 실패:', e);
     }
