@@ -15,7 +15,7 @@ import { ROUTE_USER_WORDS, ROUTE_SIGN_IN } from '~/constants/routes';
 import { EditorModalMode, EditorMode } from '~/enums/editor';
 import type { PageSize, SimpleItem } from '~/types/editor';
 import { PaginationControls } from '~/components/PaginationControls';
-import { ref as storageRef, getDownloadURL, uploadString, getMetadata } from 'firebase/storage';
+import { ref as storageRef, getDownloadURL, uploadString, getMetadata, updateMetadata } from 'firebase/storage';
 import { UserLevel } from '~/enums/user';
 import { getDefaultWordbookPath } from '~/utils/storage';
 import { SEP } from '~/constants/editor';
@@ -200,11 +200,51 @@ export function WordEditPage() {
     setEditorMode(EditorMode.Advanced);
   };
 
-  // 공개 범위 토글
-  const toggleReadAccess = () => {
-    setReadAccess(prev =>
-      prev === UserLevel.Owner ? UserLevel.Public : UserLevel.Owner,
-    );
+  // 공개 범위 토글 (스토리지 메타데이터를 즉시 반영)
+  const toggleReadAccess = async () => {
+    if (!uid || !currentUserUid || currentUserUid !== uid) {
+      setError('공개 범위를 변경할 권한이 없습니다.');
+      return;
+    }
+
+    const prev = readAccess;
+    const next =
+      prev === UserLevel.Owner ? UserLevel.Public : UserLevel.Owner;
+
+    // UI 상에서는 먼저 바꿔주고 (낙관적 업데이트)
+    setReadAccess(next);
+
+    try {
+      const path = getDefaultWordbookPath(uid);
+      const fileRef = storageRef(storage, path);
+
+      try {
+        // 파일이 이미 있으면, 기존 customMetadata를 유지하면서 readAccess만 변경
+        const meta = await getMetadata(fileRef);
+        await updateMetadata(fileRef, {
+          customMetadata: {
+            ...(meta.customMetadata || {}),
+            readAccess: next,
+          },
+        });
+      } catch (err: any) {
+        // 파일이 아직 없으면 새로 생성 (현재 text 내용으로)
+        if (err.code === 'storage/object-not-found') {
+          await uploadString(fileRef, text ?? '', 'raw', {
+            customMetadata: {
+              readAccess: next,
+            },
+          });
+        } else {
+          throw err;
+        }
+      }
+    } catch (e) {
+      console.error(e);
+      // 실패하면 상태 롤백 + 에러 메시지 표시
+      setReadAccess(prev);
+      setError('공개 범위 변경 중 오류가 발생했습니다.');
+    }
   };
 
   // 간편 에디터용: text → SimpleItem[]
