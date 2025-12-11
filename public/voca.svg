@@ -1,0 +1,114 @@
+<svg
+  width="512"
+  height="512"
+  viewBox="0 0 512 512"
+  xmlns="http://www.w3.org/2000/svg"
+>
+  <!-- 안전 여백 -->
+  <!-- margin = 8px (stroke 16px의 절반) -->
+
+  <!-- 계산된 박스 크기: 248 × 248 -->
+  <!-- 좌상단 박스 -->
+  <g>
+    <rect
+      x="8"
+      y="8"
+      width="248"
+      height="248"
+      rx="44"
+      fill="#FFFFFF"
+      stroke="#4CAF50"
+      stroke-width="16"
+    />
+    <text
+      x="132"
+      y="160"
+      text-anchor="middle"
+      dominant-baseline="middle"
+      font-size="300"
+      font-weight="700"
+      font-family="system-ui"
+      fill="#222"
+    >
+      V
+    </text>
+  </g>
+
+  <!-- 우상단 박스 -->
+  <g>
+    <rect
+      x="256"
+      y="8"
+      width="248"
+      height="248"
+      rx="44"
+      fill="#FFFFFF"
+      stroke="#03A9F4"
+      stroke-width="16"
+    />
+    <text
+      x="380"
+      y="160"
+      text-anchor="middle"
+      dominant-baseline="middle"
+      font-size="300"
+      font-weight="700"
+      font-family="system-ui"
+      fill="#222"
+    >
+      O
+    </text>
+  </g>
+
+  <!-- 좌하단 박스 -->
+  <g>
+    <rect
+      x="8"
+      y="256"
+      width="248"
+      height="248"
+      rx="44"
+      fill="#FFFFFF"
+      stroke="#FFC107"
+      stroke-width="16"
+    />
+    <text
+      x="132"
+      y="408"
+      text-anchor="middle"
+      dominant-baseline="middle"
+      font-size="300"
+      font-weight="700"
+      font-family="system-ui"
+      fill="#222"
+    >
+      C
+    </text>
+  </g>
+
+  <!-- 우하단 박스 -->
+  <g>
+    <rect
+      x="256"
+      y="256"
+      width="248"
+      height="248"
+      rx="44"
+      fill="#FFFFFF"
+      stroke="#E91E63"
+      stroke-width="16"
+    />
+    <text
+      x="380"
+      y="408"
+      text-anchor="middle"
+      dominant-baseline="middle"
+      font-size="300"
+      font-weight="700"
+      font-family="system-ui"
+      fill="#222"
+    >
+      A
+    </text>
+  </g>
+</svg>
