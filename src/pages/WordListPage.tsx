@@ -2,7 +2,7 @@
 import { useEffect, useState, type JSX } from 'react';
 import { useParams, useNavigate, Link, generatePath } from 'react-router-dom';
 import { ref as storageRef, getDownloadURL } from 'firebase/storage';
-import { ref as rtdbRef, onValue, push, set as rtdbSet, onDisconnect } from 'firebase/database';
+import { ref as rtdbRef, get, push, set as rtdbSet, onDisconnect } from 'firebase/database';
 import { onAuthStateChanged } from 'firebase/auth';
 import { LogoutButton } from '~/components/LogoutButton';
 import { auth, VITE_VOCA_ENV, storage, database } from '~/constants/firebase';
@@ -14,8 +14,8 @@ import { SEP } from '~/constants/editor';
 import { getDefaultWordbookPath } from '~/utils/storage';
 
 type Bookmark = {
-  id: string;
-  wordIndex: number;
+  wordbookPath: string;
+  wordIndex: number;   // ✅ 페이지 인덱스가 아니라 "단어 인덱스"
   updatedAt: number;
 };
 
@@ -32,10 +32,11 @@ export function WordListPage() {
   const [pageSize, setPageSize] = useState<PageSize>(computeInitialPageSize(120, 23.4));
   const [pageIndex, setPageIndex] = useState(0); // 0-based
 
-  // 북마크 상태
+  // 🔹 북마크 상태 (단어 인덱스 기반)
   const [bookmarkWordIndex, setBookmarkWordIndex] = useState<number | null>(null);
-  const [bookmarkKey, setBookmarkKey] = useState<string | null>(null);
-  const [initialBookmarkApplied, setInitialBookmarkApplied] = useState(false);
+  const [bookmarkId, setBookmarkId] = useState<string | null>(null); // 랜덤 ID
+  const [bookmarksLoaded, setBookmarksLoaded] = useState(false);     // RTDB 읽기 완료?
+  const [initialPageApplied, setInitialPageApplied] = useState(false); // 북마크 반영 완료?
 
   const wordbookPath = uid ? getDefaultWordbookPath(uid) : null;
 
@@ -77,97 +78,131 @@ export function WordListPage() {
     fetchText();
   }, [uid]);
 
-  // RTDB 북마크 감시
+  // 🔹 RTDB 북마크 1회 읽기 (랜덤 bookmarkId 기반, wordIndex 사용)
   useEffect(() => {
-    if (!currentUserUid || !uid) return;
+    if (!currentUserUid || !uid || !wordbookPath) return;
 
-    const viewerUid = currentUserUid;
-    const basePath = `voca/${VITE_VOCA_ENV}/users/${viewerUid}/bookmarks`;
-    const dbRef = rtdbRef(database, basePath);
+    let cancelled = false;
 
-    const unsub = onValue(
-      dbRef,
-      snap => {
-        const val = snap.val() as Record<string, Bookmark> | null;
-        if (!val) {
-          setBookmarkWordIndex(null);
-          setBookmarkKey(null);
+    const fetchBookmark = async () => {
+      try {
+        const viewerUid = currentUserUid;
+        const basePath = `voca/${VITE_VOCA_ENV}/users/${viewerUid}/bookmarks`;
+        const dbRef = rtdbRef(database, basePath);
+
+        const snap = await get(dbRef);
+
+        if (!snap.exists()) {
+          if (!cancelled) {
+            setBookmarkId(null);
+            setBookmarkWordIndex(null);
+            setBookmarksLoaded(true);
+          }
           return;
         }
 
-        const targetPath = getDefaultWordbookPath(uid);
-
+        const val = snap.val() as Record<string, Bookmark>;
         let best: { key: string; data: Bookmark } | null = null;
+
         for (const [key, data] of Object.entries(val)) {
-          if (!data || data.id !== targetPath) continue;
+          if (!data || data.wordbookPath !== wordbookPath) continue;
           if (!best || (data.updatedAt ?? 0) > (best.data.updatedAt ?? 0)) {
             best = { key, data };
           }
         }
 
-        if (best) {
-          setBookmarkKey(best.key);
-          setBookmarkWordIndex(best.data.wordIndex);
-        } else {
-          setBookmarkKey(null);
-          setBookmarkWordIndex(null);
+        if (!cancelled) {
+          if (best) {
+            setBookmarkId(best.key);
+            setBookmarkWordIndex(best.data.wordIndex ?? 0);
+          } else {
+            setBookmarkId(null);
+            setBookmarkWordIndex(null);
+          }
+          setBookmarksLoaded(true);
         }
-      },
-      error => {
-        console.error('[RTDB] onValue error', error);
-      },
-    );
+      } catch (e) {
+        console.error('[RTDB] get bookmark error', e);
+        if (!cancelled) {
+          setBookmarkId(null);
+          setBookmarkWordIndex(null);
+          setBookmarksLoaded(true);
+        }
+      }
+    };
+
+    fetchBookmark();
 
     return () => {
-      unsub();
+      cancelled = true;
+      setBookmarkId(null);
       setBookmarkWordIndex(null);
-      setBookmarkKey(null);
-      setInitialBookmarkApplied(false);
+      setBookmarksLoaded(false);
+      setInitialPageApplied(false);
     };
-  }, [currentUserUid, uid]);
+  }, [currentUserUid, uid, wordbookPath]);
 
-  // 북마크 → 초기 pageIndex 반영
+  // 🔹 북마크(wordIndex) → 초기 pageIndex 반영 (딱 1번)
   useEffect(() => {
-    if (initialBookmarkApplied) return;
+    if (!bookmarksLoaded) return;
+    if (initialPageApplied) return;
     if (!text) return;
-    if (bookmarkWordIndex == null) return;
 
     const allLines = text.split('\n').filter(l => l.trim() !== '');
-    if (allLines.length === 0) return;
+    if (allLines.length === 0) {
+      setInitialPageApplied(true);
+      return;
+    }
 
+    // 북마크 없음 → 기본 0페이지 유지
+    if (bookmarkWordIndex == null) {
+      setInitialPageApplied(true);
+      return;
+    }
+
+    // 북마크 있는 경우: wordIndex → pageIndex 환산
     let idx = bookmarkWordIndex;
     if (idx < 0) idx = 0;
     if (idx >= allLines.length) idx = allLines.length - 1;
 
-    const newPageIndex = Math.floor(idx / pageSize);
-    setPageIndex(newPageIndex);
-    setInitialBookmarkApplied(true);
-  }, [text, bookmarkWordIndex, pageSize, initialBookmarkApplied]);
+    const totalPages = Math.max(1, Math.ceil(allLines.length / pageSize));
+    let newPageIndex = Math.floor(idx / pageSize);
+    if (newPageIndex < 0) newPageIndex = 0;
+    if (newPageIndex >= totalPages) newPageIndex = totalPages - 1;
 
-  // 페이지 바뀔 때마다 북마크 저장
+    setPageIndex(newPageIndex);
+    setInitialPageApplied(true);
+  }, [bookmarksLoaded, initialPageApplied, text, bookmarkWordIndex, pageSize]);
+
+  // 🔹 페이지 바뀔 때마다 북마크 저장 (초기 로딩이 끝난 뒤부터)
   useEffect(() => {
+    // 아직 북마크/텍스트 초기화가 안 끝났으면 쓰지 않음
+    if (!bookmarksLoaded || !initialPageApplied) return;
+
     if (!currentUserUid || !uid || !wordbookPath) return;
     if (!text) return;
 
     const allLines = text.split('\n').filter(l => l.trim() !== '');
     if (allLines.length === 0) return;
 
+    // 안전한 pageIndex 계산 (텍스트 길이와 pageSize 기준으로 보정)
+    const { safePageIndex } = paginate(allLines, pageSize, pageIndex);
+    const wordIndex = safePageIndex * pageSize; // ✅ 이 페이지의 첫 단어 인덱스
+
     const viewerUid = currentUserUid;
     const basePath = `voca/${VITE_VOCA_ENV}/users/${viewerUid}/bookmarks`;
     const baseRef = rtdbRef(database, basePath);
 
-    const wordIndex = pageIndex * pageSize;
-
-    let key = bookmarkKey;
-    if (!key) {
-      const newRef = push(baseRef);
-      key = newRef.key!;
-      setBookmarkKey(key);
+    let id = bookmarkId;
+    if (!id) {
+      const newRef = push(baseRef); // 랜덤 bookmarkId 생성
+      id = newRef.key!;
+      setBookmarkId(id);
     }
 
-    const bkRef = rtdbRef(database, `${basePath}/${key}`);
+    const bkRef = rtdbRef(database, `${basePath}/${id}`);
     const bookmark: Bookmark = {
-      id: wordbookPath,
+      wordbookPath,
       wordIndex,
       updatedAt: Date.now(),
     };
@@ -181,7 +216,17 @@ export function WordListPage() {
       .catch(err => {
         console.error('[RTDB] onDisconnect error', err);
       });
-  }, [pageIndex, pageSize, text, currentUserUid, uid, wordbookPath, bookmarkKey]);
+  }, [
+    pageIndex,
+    pageSize,
+    text,
+    currentUserUid,
+    uid,
+    wordbookPath,
+    bookmarkId,
+    bookmarksLoaded,
+    initialPageApplied,
+  ]);
 
   if (error) {
     return (
@@ -255,11 +300,7 @@ export function WordListPage() {
       }}
     >
       {/* 최상단: 수정 버튼 중앙, 로그아웃 우상단 absolute */}
-      <div
-        className="position-relative mb-3"
-        style={{ minHeight: 32 }}
-      >
-        {/* 중앙 수정 버튼 */}
+      <div className="position-relative mb-3" style={{ minHeight: 32 }}>
         <div className="d-flex justify-content-center">
           {canEdit && (
             <button
@@ -271,11 +312,7 @@ export function WordListPage() {
           )}
         </div>
 
-        {/* 우상단 로그아웃 (absolute) */}
-        <div
-          className="position-absolute"
-          style={{ top: 0, right: 0 }}
-        >
+        <div className="position-absolute" style={{ top: 0, right: 0 }}>
           <LogoutButton />
         </div>
       </div>
@@ -299,7 +336,7 @@ export function WordListPage() {
           {hasPages ? prevPageNumber : ''}
         </div>
 
-        {/* 중앙 단어 리스트 박스 (세로폭 = 실제 단어 개수만큼) */}
+        {/* 중앙 단어 리스트 박스 */}
         <div
           className="bg-black"
           style={{
@@ -319,7 +356,6 @@ export function WordListPage() {
             }}
           >
             {(() => {
-              // 단어가 전혀 없으면 안내문만 출력
               if (lines.length === 0) {
                 return (
                   <li
@@ -391,10 +427,11 @@ export function WordListPage() {
                       textOverflow: 'ellipsis',
                       color: 'transparent',
                     }}
-                  >·</li>
+                  >
+                    ·
+                  </li>,
                 );
               }
-
 
               return items;
             })()}
