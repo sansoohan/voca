@@ -30,8 +30,14 @@ export function LogoutButton() {
   if (!currentUser) return null;
 
   return (
-    <button className="btn btn-outline-light" onClick={handleLogout}>
-      로그아웃
-    </button>
+    <li>
+      <button
+        className="dropdown-item text-danger"
+        type="button"
+        onClick={handleLogout}
+      >
+        로그아웃
+      </button>
+    </li>
   );
 }

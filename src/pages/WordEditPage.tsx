@@ -1,7 +1,7 @@
 // pages/WordEditPage.tsx
 import { useEffect, useState, useRef } from 'react';
 import { useParams, useNavigate, generatePath } from 'react-router-dom';
-import { onAuthStateChanged, signOut } from 'firebase/auth';
+import { onAuthStateChanged } from 'firebase/auth';
 import { auth, storage } from '~/constants/firebase';
 import {
   parseTextToWordLines,
@@ -11,7 +11,7 @@ import {
   paginate,
   parseLineForSimple,
 } from '~/utils/editor';
-import { ROUTE_USER_WORDS, ROUTE_SIGN_IN } from '~/constants/routes';
+import { ROUTE_USER_WORDS } from '~/constants/routes';
 import { EditorModalMode, EditorMode } from '~/enums/editor';
 import type { PageSize, SimpleItem } from '~/types/editor';
 import { PaginationControls } from '~/components/PaginationControls';
@@ -19,6 +19,9 @@ import { ref as storageRef, getDownloadURL, uploadString, getMetadata, updateMet
 import { UserLevel } from '~/enums/user';
 import { getDefaultWordbookPath } from '~/utils/storage';
 import { SEP } from '~/constants/editor';
+import { HamburgerMenu } from '~/components/HamburgerMenu';
+import { LogoutButton } from '~/components/LogoutButton';
+import { HamburgerDivider } from '~/components/HamburgerDivider';
 
 export function WordEditPage() {
   const { uid } = useParams<{ uid: string }>();
@@ -42,8 +45,7 @@ export function WordEditPage() {
   const [pageIndex, setPageIndex] = useState(0); // 0-based
 
   const [modalOpen, setModalOpen] = useState(false);
-  const [editorModalMode, setEditorModalMode] =
-    useState<EditorModalMode>(EditorModalMode.Add);
+  const [editorModalMode, setEditorModalMode] = useState<EditorModalMode>(EditorModalMode.Add);
   const [modalWord, setModalWord] = useState('');
   const [modalLink, setModalLink] = useState('');
 
@@ -149,15 +151,6 @@ export function WordEditPage() {
     } catch (e) {
       console.error(e);
       setError('저장 중 오류가 발생했습니다.');
-    }
-  };
-
-  const handleLogout = async () => {
-    try {
-      await signOut(auth);
-      nav(ROUTE_SIGN_IN);
-    } catch (e) {
-      console.error(e);
     }
   };
 
@@ -396,77 +389,56 @@ export function WordEditPage() {
         </div>
 
         {/* 오른쪽 햄버거 메뉴 */}
-        <div className="dropdown">
-          <button
-            className="btn btn-outline-light"
-            type="button"
-            data-bs-toggle="dropdown"
-            aria-expanded="false"
-          >
-            ☰
-          </button>
-          <ul className="dropdown-menu dropdown-menu-end dropdown-menu-dark">
-            {/* 에디터 모드 토글 */}
-            {isSimple ? (
-              <li>
-                <button
-                  className="dropdown-item"
-                  type="button"
-                  onClick={switchToAdvancedEditor}
-                >
-                  고급 에디터로 변경
-                </button>
-              </li>
-            ) : (
-              <li>
-                <button
-                  className="dropdown-item"
-                  type="button"
-                  onClick={switchToSimpleEditor}
-                >
-                  간편 에디터로 변경
-                </button>
-              </li>
-            )}
-
-            {/* 공개 범위 토글 */}
+        <HamburgerMenu>
+          {/* 에디터 모드 토글 */}
+          {isSimple ? (
             <li>
               <button
                 className="dropdown-item"
                 type="button"
-                onClick={toggleReadAccess}
+                onClick={switchToAdvancedEditor}
               >
-                {isOwnerOnly ? '전체공개로 전환' : '비공개로 전환'}
+                고급 에디터로 변경
               </button>
             </li>
-
-            {/* 단어 랜덤 섞기 */}
+          ) : (
             <li>
               <button
                 className="dropdown-item"
                 type="button"
-                onClick={handleRandom}
+                onClick={switchToSimpleEditor}
               >
-                단어 랜덤섞기
+                간편 에디터로 변경
               </button>
             </li>
+          )}
 
-            <li>
-              <hr className="dropdown-divider" />
-            </li>
+          {/* 공개 범위 토글 */}
+          <li>
+            <button
+              className="dropdown-item"
+              type="button"
+              onClick={toggleReadAccess}
+            >
+              {isOwnerOnly ? '전체공개로 전환' : '비공개로 전환'}
+            </button>
+          </li>
 
-            {/* 로그아웃 */}
-            <li>
-              <button
-                className="dropdown-item text-danger"
-                type="button"
-                onClick={handleLogout}
-              >
-                로그아웃
-              </button>
-            </li>
-          </ul>
-        </div>
+          {/* 단어 랜덤 섞기 */}
+          <li>
+            <button
+              className="dropdown-item"
+              type="button"
+              onClick={handleRandom}
+            >
+              단어 랜덤섞기
+            </button>
+          </li>
+
+          <HamburgerDivider />
+
+          <LogoutButton />
+        </HamburgerMenu>
       </div>
 
       {/* 본문 */}

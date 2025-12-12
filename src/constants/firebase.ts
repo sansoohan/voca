@@ -31,11 +31,12 @@ export const auth = getAuth(firebaseApp);
 (window as any).auth = auth;
 
 import { GoogleAuthProvider } from 'firebase/auth';
+import { VocaEnv } from '~/enums/firebase';
 
 export const googleProvider = new GoogleAuthProvider();
 
-export const VITE_VOCA_ENV = import.meta.env.VITE_VOCA_ENV || 'localdev';
-if (VITE_VOCA_ENV === 'localdev') {
+export const VITE_VOCA_ENV = import.meta.env.VITE_VOCA_ENV || VocaEnv.LocalDev;
+if (VITE_VOCA_ENV === VocaEnv.LocalDev) {
   let hostname = window.location.hostname;
   if (window.location.hostname === 'localhost') {
     hostname = '127.0.0.1';

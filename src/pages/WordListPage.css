@@ -1,0 +1,206 @@
+/* 화면 전체 톤: 코어 주변은 살짝 패턴 + 어두운 배경 */
+.wordlist-root {
+  background: radial-gradient(circle at top, rgba(255, 255, 255, 0.05), transparent 55%),
+              radial-gradient(circle at bottom, rgba(0, 178, 255, 0.06), transparent 60%),
+              #000;
+  color: #f8f9fa;
+}
+
+/* 상단 타이틀(철학 네이밍) */
+.wordlist-core-title {
+  position: absolute;
+  left: 0;
+  top: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  font-size: 0.78rem;
+  line-height: 1.2;
+  color: #b6c2ff;
+  opacity: 0.9;
+}
+
+.wordlist-core-title-main {
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.wordlist-core-title-sub {
+  font-size: 0.7rem;
+  color: #8a94c6;
+}
+
+/* 좌우 여백 영역 – 코어를 둘러싼 프레임 느낌 */
+.wordlist-core-row {
+  position: relative;
+}
+
+.wordlist-side-zone {
+  position: relative;
+  transition: background 0.25s ease, transform 0.2s ease, opacity 0.2s ease;
+}
+
+.wordlist-side-zone::before {
+  content: "";
+  position: absolute;
+  inset: 15% 12%;
+  border-radius: 999px;
+  background: radial-gradient(circle, rgba(255, 255, 255, 0.05), transparent 65%);
+  opacity: 0.3;
+  pointer-events: none;
+}
+
+.wordlist-side-zone-left:hover,
+.wordlist-side-zone-right:hover {
+  transform: translateY(-1px);
+  opacity: 0.5;
+}
+
+/* 중앙 코어존 – 여기가 진짜 코어 */
+.wordlist-core-zone {
+  border: 1px solid #444;
+  box-shadow:
+    0 0 0 1px rgba(120, 200, 255, 0.12),
+    0 0 32px rgba(0, 0, 0, 0.9);
+  background: radial-gradient(circle at top, #111 0, #000 55%);
+  cursor: default;
+  transform: translateY(8px);
+  opacity: 0;
+}
+
+/* 첫 로딩시 페이드인 + 살짝 위로 올라오는 느낌 */
+.wordlist-core-zone-visible {
+  animation: wordlist-core-fade-in 260ms ease-out forwards;
+}
+
+@keyframes wordlist-core-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.99);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+/* 코어 프레임 – 액자 느낌 */
+.wordlist-core-frame {
+  border-radius: 10px;
+  padding: 4px 3px;
+  border: 1px solid rgba(160, 210, 255, 0.18);
+  box-shadow:
+    inset 0 0 0 1px rgba(0, 0, 0, 0.8),
+    0 0 16px rgba(0, 0, 0, 0.7);
+  position: relative;
+  background: linear-gradient(135deg, #05070b 0%, #020304 100%);
+}
+
+/* 코어존 hover 시 배경, 외곽선에 잔잔한 맥동 애니메이션 */
+.wordlist-core-zone:hover .wordlist-core-frame {
+  animation: wordlist-core-pulse 1300ms ease-in-out infinite alternate;
+}
+
+@keyframes wordlist-core-pulse {
+  from {
+    border-color: rgba(160, 210, 255, 0.22);
+    box-shadow:
+      inset 0 0 0 1px rgba(0, 0, 0, 0.9),
+      0 0 18px rgba(0, 178, 255, 0.3);
+  }
+  to {
+    border-color: rgba(160, 210, 255, 0.35);
+    box-shadow:
+      inset 0 0 0 1px rgba(40, 60, 90, 0.8),
+      0 0 22px rgba(0, 190, 255, 0.5);
+  }
+}
+
+/* 코어 리스트 – 페이지 전환 시 슬라이드+페이드 */
+.wordlist-core-list {
+  list-style: none;
+  padding-left: 0;
+  margin-bottom: 0;
+  max-height: 100%;
+  animation: wordlist-core-page-slide 220ms ease-out;
+}
+
+@keyframes wordlist-core-page-slide {
+  from {
+    opacity: 0;
+    transform: translateX(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+/* 리스트 아이템 – 가독성 높게, 한줄 읽고 넘기기 맞춤 */
+.wordlist-core-item {
+  padding: 2px 6px;
+  border-bottom: 1px solid #222;
+  font-size: 0.92rem;
+  line-height: 1.25;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.wordlist-core-item-pad {
+  color: transparent;
+  border-bottom-color: #111;
+}
+
+/* 단어 링크 / 단어 텍스트 색감 */
+.wordlist-core-link {
+  color: #f7fbff;
+  transition: color 0.15s ease, text-shadow 0.15s ease;
+}
+
+.wordlist-core-link:hover {
+  color: #9cd6ff;
+  text-shadow: 0 0 8px rgba(0, 178, 255, 0.7);
+}
+
+.wordlist-core-word {
+  color: #f7fbff;
+}
+
+/* 하단 철학 라벨 */
+.wordlist-core-philosophy {
+  margin-top: 4px;
+}
+
+/* 바닥 철학 레이블 */
+.wordlist-footer-philosophy {
+  opacity: 0.8;
+}
+
+/* 개발 모드용 코어존 뱃지 */
+.wordlist-core-dev-badge {
+  position: absolute;
+  top: 4px;
+  right: 6px;
+  font-size: 0.7rem;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.85);
+  border: 1px solid rgba(230, 215, 14, 0.6);
+  color: #e9f390;
+  pointer-events: none;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* 반응형: 좁은 화면에서는 좌우 여백 영역을 조금 줄이기 */
+@media (max-width: 768px) {
+  .wordlist-side-zone::before {
+    inset: 20% 18%;
+  }
+
+  .wordlist-core-zone {
+    max-width: 100%;
+  }
+}

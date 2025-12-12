@@ -1,5 +1,5 @@
 // WordListPage.tsx
-import { useEffect, useState, type JSX } from 'react';
+import { useEffect, useState, type JSX, type MouseEvent } from 'react';
 import { useParams, useNavigate, Link, generatePath } from 'react-router-dom';
 import { ref as storageRef, getDownloadURL } from 'firebase/storage';
 import { ref as rtdbRef, get, push, set as rtdbSet, onDisconnect } from 'firebase/database';
@@ -12,6 +12,10 @@ import { computeInitialPageSize, paginate } from '~/utils/editor';
 import { PaginationControls } from '~/components/PaginationControls';
 import { SEP } from '~/constants/editor';
 import { getDefaultWordbookPath } from '~/utils/storage';
+import { HamburgerMenu } from '~/components/HamburgerMenu';
+import './WordListPage.css';
+import { HamburgerDivider } from '~/components/HamburgerDivider';
+import { VocaEnv } from '~/enums/firebase';
 
 type Bookmark = {
   wordbookPath: string;
@@ -37,6 +41,11 @@ export function WordListPage() {
   const [bookmarkId, setBookmarkId] = useState<string | null>(null); // 랜덤 ID
   const [bookmarksLoaded, setBookmarksLoaded] = useState(false);     // RTDB 읽기 완료?
   const [initialPageApplied, setInitialPageApplied] = useState(false); // 북마크 반영 완료?
+
+  // 🔹 코어 영역 UI 상태
+  const [coreVisible, setCoreVisible] = useState(false); // 첫 로딩 페이드인
+  const [isCoreHovered, setIsCoreHovered] = useState(false);
+  const [coreDevCursor, setCoreDevCursor] = useState<{ x: number; y: number } | null>(null);
 
   const wordbookPath = uid ? getDefaultWordbookPath(uid) : null;
 
@@ -176,7 +185,6 @@ export function WordListPage() {
 
   // 🔹 페이지 바뀔 때마다 북마크 저장 (초기 로딩이 끝난 뒤부터)
   useEffect(() => {
-    // 아직 북마크/텍스트 초기화가 안 끝났으면 쓰지 않음
     if (!bookmarksLoaded || !initialPageApplied) return;
 
     if (!currentUserUid || !uid || !wordbookPath) return;
@@ -185,9 +193,8 @@ export function WordListPage() {
     const allLines = text.split('\n').filter(l => l.trim() !== '');
     if (allLines.length === 0) return;
 
-    // 안전한 pageIndex 계산 (텍스트 길이와 pageSize 기준으로 보정)
     const { safePageIndex } = paginate(allLines, pageSize, pageIndex);
-    const wordIndex = safePageIndex * pageSize; // ✅ 이 페이지의 첫 단어 인덱스
+    const wordIndex = safePageIndex * pageSize;
 
     const viewerUid = currentUserUid;
     const basePath = `voca/${VITE_VOCA_ENV}/users/${viewerUid}/bookmarks`;
@@ -195,7 +202,7 @@ export function WordListPage() {
 
     let id = bookmarkId;
     if (!id) {
-      const newRef = push(baseRef); // 랜덤 bookmarkId 생성
+      const newRef = push(baseRef);
       id = newRef.key!;
       setBookmarkId(id);
     }
@@ -227,6 +234,28 @@ export function WordListPage() {
     bookmarksLoaded,
     initialPageApplied,
   ]);
+
+  // 🔹 코어 영역 페이드인
+  useEffect(() => {
+    if (!loading && !error) {
+      setCoreVisible(true);
+    }
+  }, [loading, error]);
+
+  // 🔹 코어 영역 hover / 마우스 이동 핸들러 (DEV 전용 툴팁용)
+  const handleCoreMouseEnter = () => {
+    setIsCoreHovered(true);
+  };
+
+  const handleCoreMouseLeave = () => {
+    setIsCoreHovered(false);
+    setCoreDevCursor(null);
+  };
+
+  const handleCoreMouseMove = (e: MouseEvent<HTMLDivElement>) => {
+    if (!import.meta.env.DEV) return;
+    setCoreDevCursor({ x: e.clientX, y: e.clientY });
+  };
 
   if (error) {
     return (
@@ -289,7 +318,7 @@ export function WordListPage() {
 
   return (
     <div
-      className="container"
+      className="container wordlist-root"
       style={{
         maxWidth: 1080,
         minHeight: '100vh',
@@ -299,30 +328,54 @@ export function WordListPage() {
         paddingBottom: '0.75rem',
       }}
     >
-      {/* 최상단: 수정 버튼 중앙, 로그아웃 우상단 absolute */}
-      <div className="position-relative mb-3" style={{ minHeight: 32 }}>
+      {/* 최상단: 코어 타이틀 중앙 + 햄버거 메뉴 우측 상단 */}
+      <div
+        className="position-relative mb-3"
+        style={{ minHeight: 40 }}
+      >
+        {/* 가운데 정렬된 코어 타이틀 */}
         <div className="d-flex justify-content-center">
-          {canEdit && (
-            <button
-              className="btn btn-primary btn-sm"
-              onClick={() => nav(generatePath(ROUTE_USER_WORDS_EDIT, { uid }))}
-            >
-              수정
-            </button>
-          )}
+          <div className="wordlist-core-title">
+            <span className="wordlist-core-title-main">Word Flow Core</span>
+            <span className="wordlist-core-title-sub">
+              한 눈에 읽고, 느낌만 파악하고, 바로 다음 단어로 넘어가기.
+            </span>
+          </div>
         </div>
 
-        <div className="position-absolute" style={{ top: 0, right: 0 }}>
-          <LogoutButton />
-        </div>
+        {/* 햄버거 메뉴: 로그인한 본인만, 항상 우측 상단 */}
+        {canEdit && (
+          <div
+            className="position-absolute"
+            style={{ top: 0, right: 0 }}
+          >
+            <HamburgerMenu>
+              <li>
+                <button
+                  className="dropdown-item"
+                  type="button"
+                  onClick={() =>
+                    nav(generatePath(ROUTE_USER_WORDS_EDIT, { uid }))
+                  }
+                >
+                  단어장 수정
+                </button>
+              </li>
+
+              <HamburgerDivider />
+
+              <LogoutButton />
+            </HamburgerMenu>
+          </div>
+        )}
       </div>
 
-      {/* 중앙: 좌/우 페이지 네비 + 단어 리스트 */}
-      <div className="d-flex mt-2 mb-3">
+      {/* 중앙: 좌/우 페이지 네비 + 코어 단어 리스트 */}
+      <div className="d-flex mt-2 mb-3 wordlist-core-row">
         {/* 왼쪽 여백 = 이전 페이지 */}
         <div
           onClick={goPrevPage}
-          className="d-flex align-items-center justify-content-center"
+          className="d-flex align-items-center justify-content-center wordlist-side-zone wordlist-side-zone-left"
           style={{
             flex: 1,
             cursor: canCycle ? 'pointer' : 'default',
@@ -336,112 +389,104 @@ export function WordListPage() {
           {hasPages ? prevPageNumber : ''}
         </div>
 
-        {/* 중앙 단어 리스트 박스 */}
+        {/* 중앙 코어 영역 */}
         <div
-          className="bg-black"
+          className={[
+            'bg-black',
+            'wordlist-core-zone',
+            coreVisible ? 'wordlist-core-zone-visible' : '',
+          ].join(' ')}
+          onMouseEnter={handleCoreMouseEnter}
+          onMouseLeave={handleCoreMouseLeave}
+          onMouseMove={handleCoreMouseMove}
           style={{
             flexShrink: 0,
             maxWidth: 720,
-            minWidth: 280,
-            border: '1px solid #444',
-            borderRadius: 6,
-            padding: 4,
+            minWidth: 260,
+            borderRadius: 10,
+            padding: 6,
+            position: 'relative',
+            overflow: 'hidden',
           }}
         >
-          <ul
-            style={{
-              listStyle: 'none',
-              paddingLeft: 0,
-              marginBottom: 0,
-            }}
-          >
-            {(() => {
-              if (lines.length === 0) {
-                return (
-                  <li
-                    style={{ padding: '4px 6px', fontSize: '0.9rem' }}
-                    className="text-secondary"
-                  >
-                    단어가 없습니다. 에디터에서 단어를 추가해 주세요.
-                  </li>
-                );
-              }
+          {/* 액자 느낌의 이너 프레임 */}
+          <div className="wordlist-core-frame">
+            <ul
+              key={safePageIndex}
+              className="wordlist-core-list"
+            >
+              {(() => {
+                if (lines.length === 0) {
+                  return (
+                    <li
+                      style={{ padding: '4px 6px', fontSize: '0.9rem' }}
+                      className="text-secondary"
+                    >
+                      단어가 없습니다. 에디터에서 단어를 추가해 주세요.
+                    </li>
+                  );
+                }
 
-              const items: JSX.Element[] = [];
+                const items: JSX.Element[] = [];
 
-              const isLastPage =
-                totalPages > 0 && safePageIndex === totalPages - 1;
-              const realCount = pagedLines.length;
-              const padCount = isLastPage
-                ? Math.max(0, pageSize - realCount)
-                : 0;
+                const isLastPage =
+                  totalPages > 0 && safePageIndex === totalPages - 1;
+                const realCount = pagedLines.length;
+                const padCount = isLastPage
+                  ? Math.max(0, pageSize - realCount)
+                  : 0;
 
-              // 실제 단어 라인
-              pagedLines.forEach((line: string, localIdx: number) => {
-                const idx = pageStart + localIdx;
-                const parts = line.split(SEP);
-                const word = parts[0]?.trim();
-                const link = parts[1]?.trim();
-                const hasLink = !!link;
+                // 실제 단어 라인
+                pagedLines.forEach((line: string, localIdx: number) => {
+                  const idx = pageStart + localIdx;
+                  const parts = line.split(SEP);
+                  const word = parts[0]?.trim();
+                  const link = parts[1]?.trim();
+                  const hasLink = !!link;
 
-                items.push(
-                  <li
-                    key={idx}
-                    style={{
-                      padding: '2px 6px',
-                      borderBottom: '1px solid #333',
-                      fontSize: '0.92rem',
-                      lineHeight: 1.25,
-                      whiteSpace: 'nowrap',
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                    }}
-                  >
-                    {hasLink ? (
-                      <a
-                        href={link}
-                        className="text-decoration-none"
-                        style={{ color: '#f8f9fa' }}
-                      >
-                        <span className="fw-bold">{word}</span>
-                      </a>
-                    ) : (
-                      <span className="fw-bold text-light">{word}</span>
-                    )}
-                  </li>,
-                );
-              });
+                  items.push(
+                    <li
+                      key={idx}
+                      className="wordlist-core-item"
+                    >
+                      {hasLink ? (
+                        <a
+                          href={link}
+                          className="text-decoration-none wordlist-core-link"
+                        >
+                          <span className="fw-bold">{word}</span>
+                        </a>
+                      ) : (
+                        <span className="fw-bold text-light wordlist-core-word">
+                          {word}
+                        </span>
+                      )}
+                    </li>,
+                  );
+                });
 
-              // 마지막 페이지면 빈 줄로 패딩해서 꽉 채우기
-              for (let i = 0; i < padCount; i++) {
-                items.push(
-                  <li
-                    key={`pad-${i}`}
-                    style={{
-                      padding: '2px 6px',
-                      borderBottom: '1px solid #333',
-                      fontSize: '0.92rem',
-                      lineHeight: 1.25,
-                      whiteSpace: 'nowrap',
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                      color: 'transparent',
-                    }}
-                  >
-                    ·
-                  </li>,
-                );
-              }
+                // 마지막 페이지면 빈 줄로 패딩해서 꽉 채우기
+                for (let i = 0; i < padCount; i++) {
+                  items.push(
+                    <li
+                      key={`pad-${i}`}
+                      className="wordlist-core-item wordlist-core-item-pad"
+                    >
+                      ·
+                    </li>,
+                  );
+                }
 
-              return items;
-            })()}
-          </ul>
+                return items;
+              })()}
+            </ul>
+          </div>
         </div>
 
         {/* 오른쪽 여백 = 다음 페이지 */}
         <div
           onClick={goNextPage}
-          className="d-flex align-items-center justify-content-center"
+          className="d-flex align-items-center justify-content-center wordlist-side-zone wordlist-side-zone-right"
           style={{
             flex: 1,
             cursor: canCycle ? 'pointer' : 'default',
@@ -456,8 +501,8 @@ export function WordListPage() {
         </div>
       </div>
 
-      {/* 최하단: 페이지네이션 컨트롤 중앙 배치 */}
-      <div className="mt-auto pt-2 d-flex justify-content-center">
+      {/* 최하단: 페이지네이션 컨트롤 */}
+      <div className="mt-auto pt-2 d-flex flex-column align-items-center">
         <PaginationControls
           pageSize={pageSize}
           pageIndex={safePageIndex}
@@ -469,6 +514,24 @@ export function WordListPage() {
           onPageIndexChange={setPageIndex}
         />
       </div>
+
+      {/* 🔹 개발 모드 전용: 마우스 커서 옆에 Core Zone 툴팁 */}
+      {VITE_VOCA_ENV !== VocaEnv.Prod && isCoreHovered && coreDevCursor && (
+        <div
+          className="wordlist-core-dev-badge"
+          style={{
+            position: 'fixed',
+            left: coreDevCursor.x + 12,
+            top: coreDevCursor.y + 12,
+            zIndex: 9999,
+            pointerEvents: 'none',
+            width: 'fit-content',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          Core Zone
+        </div>
+      )}
     </div>
   );
 }

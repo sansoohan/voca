@@ -1,4 +1,4 @@
-## Voca : 1초 1단어 초고속 단어장
+## Voca : No extra features. Just you and the word.
 
 ### 특징
 
