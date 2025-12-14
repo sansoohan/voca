@@ -5,7 +5,7 @@ import { ref as storageRef, getDownloadURL } from 'firebase/storage';
 import { ref as rtdbRef, get, push, set as rtdbSet, onDisconnect } from 'firebase/database';
 import { LogoutButton } from '~/components/LogoutButton';
 import { VITE_VOCA_ENV, storage, database } from '~/constants/firebase';
-import { ROUTE_SIGN_IN, ROUTE_USER_WORDS_EDIT } from '~/constants/routes';
+import { ROUTE_SIGN_IN, ROUTE_USER_WORDS, ROUTE_USER_WORDS_EDIT } from '~/constants/routes';
 import type { PageSize } from '~/types/editor';
 import { computeInitialPageSize, paginate } from '~/utils/editor';
 import { PaginationControls } from '~/components/PaginationControls';
@@ -19,7 +19,7 @@ import './WordListPage.css';
 
 type Bookmark = {
   wordbookPath: string;
-  wordIndex: number;   // ✅ 페이지 인덱스가 아니라 "단어 인덱스"
+  wordIndex: number;
   updatedAt: number;
 };
 
@@ -274,7 +274,6 @@ export function WordListPage() {
     );
   }
 
-  const canEdit = currentUserUid === uid;
   const lines = text.split('\n').filter(l => l.trim() !== '');
 
   const {
@@ -341,31 +340,68 @@ export function WordListPage() {
           </div>
         </div>
 
-        {/* 햄버거 메뉴: 로그인한 본인만, 항상 우측 상단 */}
-        {canEdit && (
-          <div
-            className="position-absolute"
-            style={{ top: 0, right: 0 }}
-          >
-            <HamburgerMenu>
+        {/* 햄버거 메뉴: 로그인 여부 / 본인 여부에 따라 내용 분기 */}
+        <div
+          className="position-absolute"
+          style={{ top: 0, right: 0 }}
+        >
+          <HamburgerMenu>
+            {/* 1) 로그인 안 된 경우: 로그인 버튼만 */}
+            {!currentUserUid && (
               <li>
                 <button
                   className="dropdown-item"
                   type="button"
-                  onClick={() =>
-                    nav(generatePath(ROUTE_USER_WORDS_EDIT, { uid }))
-                  }
+                  onClick={() => nav(ROUTE_SIGN_IN)}
                 >
-                  단어장 수정
+                  로그인
                 </button>
               </li>
+            )}
 
-              <HamburgerDivider />
+            {/* 2) 로그인 + 본인 단어장인 경우: 단어장 수정 + 로그아웃 */}
+            {currentUserUid && currentUserUid === uid && (
+              <>
+                <li>
+                  <button
+                    className="dropdown-item"
+                    type="button"
+                    onClick={() =>
+                      nav(generatePath(ROUTE_USER_WORDS_EDIT, { uid }))
+                    }
+                  >
+                    단어장 수정
+                  </button>
+                </li>
 
-              <LogoutButton />
-            </HamburgerMenu>
-          </div>
-        )}
+                <HamburgerDivider />
+
+                <LogoutButton />
+              </>
+            )}
+
+            {/* 3) 로그인 + 남의 단어장인 경우: 내 단어장으로 이동 + 로그아웃 */}
+            {currentUserUid && uid && currentUserUid !== uid && (
+              <>
+                <li>
+                  <button
+                    className="dropdown-item"
+                    type="button"
+                    onClick={() =>
+                      nav(generatePath(ROUTE_USER_WORDS, { uid: currentUserUid }))
+                    }
+                  >
+                    내 단어장으로 이동
+                  </button>
+                </li>
+
+                <HamburgerDivider />
+
+                <LogoutButton />
+              </>
+            )}
+          </HamburgerMenu>
+        </div>
       </div>
 
       {/* 중앙: 좌/우 페이지 네비 + 코어 단어 리스트 */}
