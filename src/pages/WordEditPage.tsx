@@ -59,6 +59,9 @@ export function WordEditPage() {
   const [modalWord, setModalWord] = useState('');
   const [modalLink, setModalLink] = useState('');
 
+  // 🔹 랜덤 섞기 안내 모달
+  const [shuffleNoticeOpen, setShuffleNoticeOpen] = useState(false);
+
   // 고급 에디터 textarea ref (커서 위치 / 스크롤 제어용)
   const advancedTextareaRef = useRef<HTMLTextAreaElement | null>(null);
 
@@ -130,6 +133,7 @@ export function WordEditPage() {
 
   const handleRandom = () => {
     setText(prev => shuffleLines(prev));
+    setShuffleNoticeOpen(true); // 🔹 안내 모달 오픈
   };
 
   const handleSave = async () => {
@@ -385,7 +389,7 @@ export function WordEditPage() {
             뒤로
           </button>
           <button className="btn btn-success" onClick={handleSave}>
-            변경
+            저장
           </button>
         </div>
 
@@ -593,6 +597,34 @@ export function WordEditPage() {
               <button
                 className="btn btn-primary btn-sm"
                 onClick={handleModalConfirm}
+              >
+                확인
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 🔹 랜덤 섞기 안내 모달 */}
+      {shuffleNoticeOpen && (
+        <div
+          className="position-fixed top-0 start-0 w-100 h-100 d-flex justify-content-center align-items-center"
+          style={{ backgroundColor: 'rgba(0,0,0,0.6)', zIndex: 1050 }}
+        >
+          <div
+            className="bg-dark text-light p-3 rounded"
+            style={{ minWidth: 280 }}
+          >
+            <h5 className="mb-3">알림</h5>
+            <p className="mb-3">
+              단어 순서를 랜덤으로 섞었습니다.
+              <br />
+              <strong>상단의 &quot;저장&quot; 버튼을 누르면 적용됩니다.</strong>
+            </p>
+            <div className="d-flex justify-content-end">
+              <button
+                className="btn btn-primary btn-sm"
+                onClick={() => setShuffleNoticeOpen(false)}
               >
                 확인
               </button>
