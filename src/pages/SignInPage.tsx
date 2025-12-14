@@ -1,10 +1,9 @@
 // pages/SignInPage.tsx
-import { useEffect, useState } from 'react';
-import { onAuthStateChanged, signInWithEmailAndPassword, signInWithPopup} from 'firebase/auth';
+import { useState } from 'react';
+import { signInWithEmailAndPassword, signInWithPopup} from 'firebase/auth';
 import { useNavigate, Link, generatePath } from 'react-router-dom';
 import { auth, googleProvider } from '~/constants/firebase';
 import { ROUTE_USER_WORDS } from '~/constants/routes';
-import { ensureDefaultWordbook } from '~/utils/storage';
 
 export function SignInPage() {
   const nav = useNavigate();
@@ -25,29 +24,11 @@ export function SignInPage() {
 
   const handleGoogleSignIn = async () => {
     try {
-      const cred = await signInWithPopup(auth, googleProvider);
-      const uid = cred.user.uid;
-
-      // 🔹 Firestore 없이, Storage에 기본 단어장만 보장
-      await ensureDefaultWordbook(uid);
-
-      nav(generatePath(ROUTE_USER_WORDS, { uid }));
-    } catch (e: any) {
-      console.error(e);
-      setError(e.message ?? '구글 로그인 실패');
+      await signInWithPopup(auth, googleProvider);
+    } catch (e) {
+      setError('구글 로그인 실패');
     }
   };
-
-  // 로그인된 상태라면 자동 이동
-  useEffect(() => {
-    const unsub = onAuthStateChanged(auth, user => {
-      if (user) {
-        nav(generatePath(ROUTE_USER_WORDS, { uid: user.uid }));
-      }
-    });
-
-    return unsub;
-  }, [nav]);
 
   return (
     <div className="container py-5">

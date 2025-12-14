@@ -3,9 +3,8 @@ import { useEffect, useState, type JSX, type MouseEvent } from 'react';
 import { useParams, useNavigate, Link, generatePath } from 'react-router-dom';
 import { ref as storageRef, getDownloadURL } from 'firebase/storage';
 import { ref as rtdbRef, get, push, set as rtdbSet, onDisconnect } from 'firebase/database';
-import { onAuthStateChanged } from 'firebase/auth';
 import { LogoutButton } from '~/components/LogoutButton';
-import { auth, VITE_VOCA_ENV, storage, database } from '~/constants/firebase';
+import { VITE_VOCA_ENV, storage, database } from '~/constants/firebase';
 import { ROUTE_SIGN_IN, ROUTE_USER_WORDS_EDIT } from '~/constants/routes';
 import type { PageSize } from '~/types/editor';
 import { computeInitialPageSize, paginate } from '~/utils/editor';
@@ -13,9 +12,10 @@ import { PaginationControls } from '~/components/PaginationControls';
 import { SEP } from '~/constants/editor';
 import { getDefaultWordbookPath } from '~/utils/storage';
 import { HamburgerMenu } from '~/components/HamburgerMenu';
-import './WordListPage.css';
 import { HamburgerDivider } from '~/components/HamburgerDivider';
 import { VocaEnv } from '~/enums/firebase';
+import { useAuth } from '~/contexts/AuthContext';
+import './WordListPage.css';
 
 type Bookmark = {
   wordbookPath: string;
@@ -27,8 +27,10 @@ export function WordListPage() {
   const { uid } = useParams<{ uid: string }>();
   const nav = useNavigate();
 
+  const { user } = useAuth();
+  const currentUserUid = user?.uid ?? null;
+
   const [text, setText] = useState<string>('');
-  const [currentUserUid, setCurrentUserUid] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
 
@@ -49,14 +51,6 @@ export function WordListPage() {
 
   const wordbookPath = uid ? getDefaultWordbookPath(uid) : null;
 
-  // Auth
-  useEffect(() => {
-    const unsub = onAuthStateChanged(auth, user => {
-      setCurrentUserUid(user?.uid ?? null);
-    });
-    return () => unsub();
-  }, []);
-
   // Storage에서 wordbook 텍스트 로드
   useEffect(() => {
     if (!uid) return;
@@ -73,12 +67,16 @@ export function WordListPage() {
         setError(null);
       } catch (e: any) {
         console.error(e);
+
         if (e.code === 'storage/object-not-found') {
-          setError('해당 단어장을 찾을 수 없습니다.');
+          // 🔹 파일이 없으면 "에러" 대신 그냥 빈 단어장으로 시작
+          setText('');
+          setError(null);
         } else {
+          // 진짜 오류일 때만 에러 표시
+          setText('');
           setError('단어장을 불러오는 중 오류가 발생했습니다.');
         }
-        setText('');
       } finally {
         setLoading(false);
       }

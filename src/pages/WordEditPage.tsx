@@ -1,8 +1,13 @@
 // pages/WordEditPage.tsx
 import { useEffect, useState, useRef, useLayoutEffect } from 'react';
 import { useParams, useNavigate, generatePath } from 'react-router-dom';
-import { onAuthStateChanged } from 'firebase/auth';
-import { auth, storage } from '~/constants/firebase';
+import {
+  ref as storageRef,
+  getDownloadURL,
+  uploadString,
+  getMetadata,
+  updateMetadata,
+} from 'firebase/storage';
 import {
   parseTextToWordLines,
   wordLinesToText,
@@ -15,22 +20,25 @@ import { ROUTE_USER_WORDS } from '~/constants/routes';
 import { EditorModalMode, EditorMode } from '~/enums/editor';
 import type { PageSize, SimpleItem } from '~/types/editor';
 import { PaginationControls } from '~/components/PaginationControls';
-import { ref as storageRef, getDownloadURL, uploadString, getMetadata, updateMetadata } from 'firebase/storage';
 import { UserLevel } from '~/enums/user';
 import { getDefaultWordbookPath } from '~/utils/storage';
 import { SEP } from '~/constants/editor';
 import { HamburgerMenu } from '~/components/HamburgerMenu';
 import { LogoutButton } from '~/components/LogoutButton';
 import { HamburgerDivider } from '~/components/HamburgerDivider';
+import { storage } from '~/constants/firebase';
+import { useAuth } from '~/contexts/AuthContext';
 
 export function WordEditPage() {
   const { uid } = useParams<{ uid: string }>();
   const nav = useNavigate();
 
+  const { user } = useAuth();
+  const currentUserUid = user?.uid ?? null;
+
   const [text, setText] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [currentUserUid, setCurrentUserUid] = useState<string | null>(null);
 
   const [editorMode, setEditorMode] = useState<EditorMode>(EditorMode.Simple);
 
@@ -41,7 +49,9 @@ export function WordEditPage() {
   const [selectedLineIndex, setSelectedLineIndex] = useState<number | null>(null);
 
   // 간편 에디터 페이지네이션 상태
-  const [pageSize, setPageSize] = useState<PageSize>(computeInitialPageSize(190, 23.4));
+  const [pageSize, setPageSize] = useState<PageSize>(
+    computeInitialPageSize(190, 23.4),
+  );
   const [pageIndex, setPageIndex] = useState(0); // 0-based
 
   const [modalOpen, setModalOpen] = useState(false);
@@ -52,24 +62,23 @@ export function WordEditPage() {
   // 고급 에디터 textarea ref (커서 위치 / 스크롤 제어용)
   const advancedTextareaRef = useRef<HTMLTextAreaElement | null>(null);
 
+  // 단어장 + 메타데이터 로딩 (AuthContext 기반)
   useEffect(() => {
     if (!uid) return;
 
-    setLoading(true);
-    const unsub = onAuthStateChanged(auth, async user => {
+    const fetchData = async () => {
+      setLoading(true);
+
       try {
-        if (!user) {
-          setCurrentUserUid(null);
+        if (!currentUserUid) {
           setError('로그인이 필요합니다.');
-          setLoading(false);
+          setText('');
           return;
         }
 
-        setCurrentUserUid(user.uid);
-
-        if (user.uid !== uid) {
+        if (currentUserUid !== uid) {
           setError('본인 계정만 수정할 수 있습니다.');
-          setLoading(false);
+          setText('');
           return;
         }
 
@@ -77,7 +86,6 @@ export function WordEditPage() {
         const fileRef = storageRef(storage, path);
 
         try {
-          // 텍스트 + 메타데이터를 함께 가져오기
           const [url, meta] = await Promise.all([
             getDownloadURL(fileRef),
             getMetadata(fileRef),
@@ -89,20 +97,17 @@ export function WordEditPage() {
 
           const metaAccess = meta.customMetadata?.readAccess as | UserLevel | undefined;
 
-          // 메타데이터 없으면 기본 Owner
           setReadAccess(metaAccess === UserLevel.Public ? UserLevel.Public : UserLevel.Owner);
-
           setError(null);
         } catch (err: any) {
           console.error(err);
 
           if (err.code === 'storage/object-not-found') {
-            // 파일이 없는 경우: 에러로 막지 말고 "빈 단어장 + 비공개"로 시작
+            // 파일이 없는 경우: 빈 단어장 + 비공개로 시작
             setText('');
             setReadAccess(UserLevel.Owner);
             setError(null);
           } else {
-            // 진짜 오류일 때만 에러 화면으로 보냄
             setError('단어장을 불러오는 중 오류가 발생했습니다.');
             setText('');
           }
@@ -113,10 +118,10 @@ export function WordEditPage() {
       } finally {
         setLoading(false);
       }
-    });
+    };
 
-    return () => unsub();
-  }, [uid]);
+    fetchData();
+  }, [uid, currentUserUid]);
 
   const handleBack = () => {
     if (!uid) return;
@@ -140,7 +145,6 @@ export function WordEditPage() {
       const path = getDefaultWordbookPath(uid);
       const fileRef = storageRef(storage, path);
 
-      // 저장할 때 현재 readAccess 를 메타데이터에 반영
       await uploadString(fileRef, newText, 'raw', {
         customMetadata: {
           readAccess,
@@ -166,7 +170,6 @@ export function WordEditPage() {
 
       setSelectedLineIndex(lineIndex);
 
-      // 해당 줄이 있는 페이지로 이동
       const simpleItems: SimpleItem[] = (() => {
         const lines = text.split(/\r?\n/);
         const items: SimpleItem[] = [];
@@ -204,7 +207,6 @@ export function WordEditPage() {
     const next =
       prev === UserLevel.Owner ? UserLevel.Public : UserLevel.Owner;
 
-    // UI 상에서는 먼저 바꿔주고 (낙관적 업데이트)
     setReadAccess(next);
 
     try {
@@ -212,7 +214,6 @@ export function WordEditPage() {
       const fileRef = storageRef(storage, path);
 
       try {
-        // 파일이 이미 있으면, 기존 customMetadata를 유지하면서 readAccess만 변경
         const meta = await getMetadata(fileRef);
         await updateMetadata(fileRef, {
           customMetadata: {
@@ -221,7 +222,6 @@ export function WordEditPage() {
           },
         });
       } catch (err: any) {
-        // 파일이 아직 없으면 새로 생성 (현재 text 내용으로)
         if (err.code === 'storage/object-not-found') {
           await uploadString(fileRef, text ?? '', 'raw', {
             customMetadata: {
@@ -234,7 +234,6 @@ export function WordEditPage() {
       }
     } catch (e) {
       console.error(e);
-      // 실패하면 상태 롤백 + 에러 메시지 표시
       setReadAccess(prev);
       setError('공개 범위 변경 중 오류가 발생했습니다.');
     }
@@ -257,12 +256,10 @@ export function WordEditPage() {
     pageIndex,
   );
 
-  // 간편 에디터: 단어 선택 핸들러
   const handleSelectItem = (lineIndex: number) => {
     setSelectedLineIndex(prev => (prev === lineIndex ? null : lineIndex));
   };
 
-  // 모달 열기 (추가/수정)
   const openAddModal = () => {
     setEditorModalMode(EditorModalMode.Add);
     setModalWord('');
@@ -288,7 +285,6 @@ export function WordEditPage() {
     setModalOpen(false);
   };
 
-  // 모달에서 확인 눌렀을 때
   const handleModalConfirm = () => {
     const word = modalWord.trim();
     const link = modalLink.trim();
@@ -318,7 +314,6 @@ export function WordEditPage() {
     setModalOpen(false);
   };
 
-  // 간편 에디터: 삭제
   const handleDelete = () => {
     if (selectedLineIndex == null) return;
     const lines = text.split(/\r?\n/);
@@ -340,28 +335,27 @@ export function WordEditPage() {
     const lines = text.split(/\r?\n/);
     let caretPos = 0;
     for (let i = 0; i < selectedLineIndex && i < lines.length; i++) {
-      caretPos += lines[i].length + 1; // 줄 + 개행
+      caretPos += lines[i].length + 1;
     }
 
-    // 렌더 이후 한 프레임 뒤에 커서 이동 + 스크롤 조정
     requestAnimationFrame(() => {
       const textarea = advancedTextareaRef.current;
       if (!textarea) return;
 
-      // 1) 커서 이동
       textarea.focus();
       textarea.setSelectionRange(caretPos, caretPos);
 
-      // 2) caret 위치 비율로 스크롤 위치 계산 (wrap 여부와 상관없이 대략 맞춰 줌)
       const totalLen = text.length || 1;
       const ratio = caretPos / totalLen;
       const maxScroll = textarea.scrollHeight - textarea.clientHeight;
-      const targetScrollTop = Math.max(0, Math.min(maxScroll, maxScroll * ratio));
+      const targetScrollTop = Math.max(
+        0,
+        Math.min(maxScroll, maxScroll * ratio),
+      );
 
       textarea.scrollTop = targetScrollTop;
     });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [editorMode, selectedLineIndex]);
+  }, [editorMode, selectedLineIndex, text]);
 
   if (loading) {
     return (
@@ -397,7 +391,6 @@ export function WordEditPage() {
 
         {/* 오른쪽 햄버거 메뉴 */}
         <HamburgerMenu>
-          {/* 에디터 모드 토글 */}
           {isSimple ? (
             <li>
               <button
@@ -420,7 +413,6 @@ export function WordEditPage() {
             </li>
           )}
 
-          {/* 공개 범위 토글 */}
           <li>
             <button
               className="dropdown-item"
@@ -431,7 +423,6 @@ export function WordEditPage() {
             </button>
           </li>
 
-          {/* 단어 랜덤 섞기 */}
           <li>
             <button
               className="dropdown-item"
@@ -451,7 +442,6 @@ export function WordEditPage() {
       {/* 본문 */}
       {isSimple ? (
         <>
-          {/* 간편 에디터 상단 아이콘 */}
           <div className="d-flex justify-content-end mb-2 gap-2">
             <button
               className="btn btn-sm btn-outline-light"
@@ -490,7 +480,6 @@ export function WordEditPage() {
             onPageIndexChange={setPageIndex}
           />
 
-          {/* 단어 리스트 (페이지 단위) – WordListPage 스타일에 맞춤 */}
           <ul
             style={{
               listStyle: 'none',
@@ -507,14 +496,14 @@ export function WordEditPage() {
                   key={item.lineIndex}
                   onClick={() => handleSelectItem(item.lineIndex)}
                   style={{
-                    padding: '2px 6px',          // 고밀도 패딩
+                    padding: '2px 6px',
                     borderBottom: '1px solid #333',
                     fontSize: '0.92rem',
                     lineHeight: 1.25,
                     whiteSpace: 'nowrap',
                     overflow: 'hidden',
                     textOverflow: 'ellipsis',
-                    backgroundColor: bg,        // 🔹 선택 시 색 채우기로 표시
+                    backgroundColor: bg,
                     color: '#f8f9fa',
                     cursor: 'pointer',
                   }}
@@ -523,7 +512,7 @@ export function WordEditPage() {
                   {item.link && (
                     <span
                       className="small"
-                      style={{ color: '#0dcaf0' }} // text-info 비슷한 색
+                      style={{ color: '#0dcaf0' }}
                     >
                       {item.link}
                     </span>
@@ -546,7 +535,6 @@ export function WordEditPage() {
           </ul>
         </>
       ) : (
-        // 고급 에디터 그대로
         <textarea
           ref={advancedTextareaRef}
           className="form-control bg-black text-light"
@@ -562,7 +550,6 @@ export function WordEditPage() {
         />
       )}
 
-      {/* 모달 */}
       {modalOpen && (
         <div
           className="position-fixed top-0 start-0 w-100 h-100 d-flex justify-content-center align-items-center"
@@ -573,7 +560,9 @@ export function WordEditPage() {
             style={{ minWidth: 320 }}
           >
             <h5 className="mb-3">
-              {editorModalMode === EditorModalMode.Add ? '단어 추가' : '단어 수정'}
+              {editorModalMode === EditorModalMode.Add
+                ? '단어 추가'
+                : '단어 수정'}
             </h5>
 
             <div className="mb-2">
@@ -595,10 +584,16 @@ export function WordEditPage() {
             </div>
 
             <div className="d-flex justify-content-end gap-2">
-              <button className="btn btn-secondary btn-sm" onClick={closeModal}>
+              <button
+                className="btn btn-secondary btn-sm"
+                onClick={closeModal}
+              >
                 취소
               </button>
-              <button className="btn btn-primary btn-sm" onClick={handleModalConfirm}>
+              <button
+                className="btn btn-primary btn-sm"
+                onClick={handleModalConfirm}
+              >
                 확인
               </button>
             </div>

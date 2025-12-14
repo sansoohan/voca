@@ -1,26 +1,18 @@
 // pages/SignUpPage.tsx
 import { useState } from 'react';
 import { createUserWithEmailAndPassword } from 'firebase/auth';
-import { useNavigate, Link, generatePath } from 'react-router-dom';
-import { ROUTE_SIGN_IN, ROUTE_USER_WORDS } from '~/constants/routes';
+import { Link } from 'react-router-dom';
+import { ROUTE_SIGN_IN } from '~/constants/routes';
 import { auth } from '~/constants/firebase';
-import { ensureDefaultWordbook } from '~/utils/storage';
 
 export function SignUpPage() {
-  const nav = useNavigate();
   const [email, setEmail] = useState('');
   const [pw, setPw] = useState('');
   const [error, setError] = useState<string | null>(null);
 
   const handleSignUp = async () => {
     try {
-      const cred = await createUserWithEmailAndPassword(auth, email, pw);
-      const uid = cred.user.uid;
-
-      // 🔹 Firestore 문서 없이, Storage에 기본 단어장만 생성
-      await ensureDefaultWordbook(uid);
-
-      nav(generatePath(ROUTE_USER_WORDS, { uid }));
+      await createUserWithEmailAndPassword(auth, email, pw);
     } catch (e: any) {
       console.error(e);
       setError(e.message ?? '회원가입 실패');
