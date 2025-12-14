@@ -1,5 +1,5 @@
 // pages/WordEditPage.tsx
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState, useRef, useLayoutEffect } from 'react';
 import { useParams, useNavigate, generatePath } from 'react-router-dom';
 import { onAuthStateChanged } from 'firebase/auth';
 import { auth, storage } from '~/constants/firebase';
@@ -329,32 +329,39 @@ export function WordEditPage() {
     setSelectedLineIndex(null);
   };
 
-  // 간편 → 고급: 선택된 단어 위치로 커서 이동 + 스크롤 조정
-  useEffect(() => {
+  // 간편 → 고급: 선택된 단어 위치로 커서 이동 + 스크롤 맞춰주기
+  useLayoutEffect(() => {
     if (editorMode !== EditorMode.Advanced) return;
     if (selectedLineIndex == null) return;
+
     const el = advancedTextareaRef.current;
     if (!el) return;
 
     const lines = text.split(/\r?\n/);
-    let pos = 0;
+    let caretPos = 0;
     for (let i = 0; i < selectedLineIndex && i < lines.length; i++) {
-      pos += lines[i].length + 1; // 줄 + 개행
+      caretPos += lines[i].length + 1; // 줄 + 개행
     }
 
-    el.focus();
-    el.selectionStart = el.selectionEnd = pos;
+    // 렌더 이후 한 프레임 뒤에 커서 이동 + 스크롤 조정
+    requestAnimationFrame(() => {
+      const textarea = advancedTextareaRef.current;
+      if (!textarea) return;
 
-    try {
-      const computed = window.getComputedStyle(el);
-      const lineHeight = parseFloat(computed.lineHeight || '0') || 20;
-      const targetScrollTop =
-        lineHeight * (selectedLineIndex - 1) - el.clientHeight / 2;
-      el.scrollTop = Math.max(0, targetScrollTop);
-    } catch {
-      // getComputedStyle 실패해도 그냥 무시
-    }
-  }, [editorMode, selectedLineIndex, text]);
+      // 1) 커서 이동
+      textarea.focus();
+      textarea.setSelectionRange(caretPos, caretPos);
+
+      // 2) caret 위치 비율로 스크롤 위치 계산 (wrap 여부와 상관없이 대략 맞춰 줌)
+      const totalLen = text.length || 1;
+      const ratio = caretPos / totalLen;
+      const maxScroll = textarea.scrollHeight - textarea.clientHeight;
+      const targetScrollTop = Math.max(0, Math.min(maxScroll, maxScroll * ratio));
+
+      textarea.scrollTop = targetScrollTop;
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editorMode, selectedLineIndex]);
 
   if (loading) {
     return (
