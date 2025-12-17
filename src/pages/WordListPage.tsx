@@ -9,13 +9,14 @@ import { ROUTE_SIGN_IN, ROUTE_USER_WORDS, ROUTE_USER_WORDS_EDIT } from '~/consta
 import type { PageSize } from '~/types/editor';
 import { computeInitialPageSize, paginate } from '~/utils/editor';
 import { PaginationControls } from '~/components/PaginationControls';
-import { SEP } from '~/constants/editor';
+import { DefaultWordItemHeight, SEP } from '~/constants/editor';
 import { getDefaultWordbookPath } from '~/utils/storage';
 import { HamburgerMenu } from '~/components/HamburgerMenu';
 import { HamburgerDivider } from '~/components/HamburgerDivider';
 import { VocaEnv } from '~/enums/firebase';
 import { useAuth } from '~/contexts/AuthContext';
 import './WordListPage.css';
+import { useApp } from '~/contexts/AppContext';
 
 type Bookmark = {
   wordbookPath: string;
@@ -30,12 +31,18 @@ export function WordListPage() {
   const { user } = useAuth();
   const currentUserUid = user?.uid ?? null;
 
+  const { isMobile } = useApp();
+  const wordItemRatio = isMobile ? 0.75 : 0.92;
+  const wordItemPaddingVertical = 3.2;
+  const wordItemHeight = DefaultWordItemHeight * wordItemRatio + wordItemPaddingVertical;
+  const wordItemFontSize = `${wordItemRatio}rem`;
+
   const [text, setText] = useState<string>('');
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
 
   // 한 페이지에 최대 단어 수
-  const [pageSize, setPageSize] = useState<PageSize>(computeInitialPageSize(120, 23.4));
+  const [pageSize, setPageSize] = useState<PageSize>(computeInitialPageSize(120, wordItemHeight));
   const [pageIndex, setPageIndex] = useState(0); // 0-based
 
   // 🔹 북마크 상태 (단어 인덱스 기반)
@@ -482,6 +489,7 @@ export function WordListPage() {
                     <li
                       key={idx}
                       className="wordlist-core-item"
+                      style={{fontSize: wordItemFontSize}}
                     >
                       {hasLink ? (
                         <a

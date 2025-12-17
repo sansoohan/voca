@@ -22,12 +22,13 @@ import type { PageSize, SimpleItem } from '~/types/editor';
 import { PaginationControls } from '~/components/PaginationControls';
 import { UserLevel } from '~/enums/user';
 import { getDefaultWordbookPath } from '~/utils/storage';
-import { SEP } from '~/constants/editor';
+import { DefaultWordItemHeight, SEP } from '~/constants/editor';
 import { HamburgerMenu } from '~/components/HamburgerMenu';
 import { LogoutButton } from '~/components/LogoutButton';
 import { HamburgerDivider } from '~/components/HamburgerDivider';
 import { storage } from '~/constants/firebase';
 import { useAuth } from '~/contexts/AuthContext';
+import { useApp } from '~/contexts/AppContext';
 
 export function WordEditPage() {
   const { uid } = useParams<{ uid: string }>();
@@ -35,6 +36,12 @@ export function WordEditPage() {
 
   const { user } = useAuth();
   const currentUserUid = user?.uid ?? null;
+
+  const { isMobile } = useApp();
+  const wordItemRatio = isMobile ? 0.75 : 0.92;
+  const wordItemPaddingVertical = 3.2;
+  const wordItemHeight = DefaultWordItemHeight * wordItemRatio + wordItemPaddingVertical;
+  const wordItemFontSize = `${wordItemRatio}rem`;
 
   const [text, setText] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -49,9 +56,7 @@ export function WordEditPage() {
   const [selectedLineIndex, setSelectedLineIndex] = useState<number | null>(null);
 
   // 간편 에디터 페이지네이션 상태
-  const [pageSize, setPageSize] = useState<PageSize>(
-    computeInitialPageSize(190, 23.4),
-  );
+  const [pageSize, setPageSize] = useState<PageSize>(computeInitialPageSize(190, wordItemHeight));
   const [pageIndex, setPageIndex] = useState(0); // 0-based
 
   const [modalOpen, setModalOpen] = useState(false);
@@ -502,7 +507,7 @@ export function WordEditPage() {
                   style={{
                     padding: '2px 6px',
                     borderBottom: '1px solid #333',
-                    fontSize: '0.92rem',
+                    fontSize: wordItemFontSize,
                     lineHeight: 1.25,
                     whiteSpace: 'nowrap',
                     overflow: 'hidden',
