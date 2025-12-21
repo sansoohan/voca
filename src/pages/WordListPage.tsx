@@ -1,141 +1,72 @@
 // WordListPage.tsx
-import { useEffect, useState, type JSX, type MouseEvent } from 'react';
+import { useCallback, useEffect, useMemo, useState, type JSX } from 'react';
 import { useParams, useNavigate, Link, generatePath } from 'react-router-dom';
 import { ref as storageRef, getDownloadURL } from 'firebase/storage';
-import { ref as rtdbRef, get, push, set as rtdbSet, onDisconnect } from 'firebase/database';
-import { LogoutButton } from '~/components/LogoutButton';
-import { VITE_VOCA_ENV, storage, database } from '~/constants/firebase';
-import { ROUTE_SIGN_IN, ROUTE_USER_WORDS, ROUTE_USER_WORDS_EDIT } from '~/constants/routes';
+import { ref as rtdbRef, get, push, set as rtdbSet } from 'firebase/database';
+import { onAuthStateChanged } from 'firebase/auth';
+
+import { auth, VITE_VOCA_ENV, storage, database } from '~/constants/firebase';
+import { ROUTE_SIGN_IN, ROUTE_USER_WORDS_EDIT } from '~/constants/routes';
 import type { PageSize } from '~/types/editor';
 import { computeInitialPageSize, paginate } from '~/utils/editor';
 import { PaginationControls } from '~/components/PaginationControls';
-import { DefaultWordItemHeight, SEP } from '~/constants/editor';
+import { SEP } from '~/constants/editor';
 import { getDefaultWordbookPath } from '~/utils/storage';
 import { HamburgerMenu } from '~/components/HamburgerMenu';
 import { HamburgerDivider } from '~/components/HamburgerDivider';
-import { VocaEnv } from '~/enums/firebase';
-import { useAuth } from '~/contexts/AuthContext';
-import './WordListPage.css';
-import { useApp } from '~/contexts/AppContext';
+import { LogoutButton } from '~/components/LogoutButton';
+import { idbGetBookmark, idbSetBookmark, stripUndefinedDeep } from '~/utils/bookmarkIdb';
+import type { Bookmark } from '~/types/bookmark';
 
-type Bookmark = {
-  wordbookPath: string;
-  wordIndex: number;
-  updatedAt: number;
-};
+import './WordListPage.css';
 
 export function WordListPage() {
   const { uid } = useParams<{ uid: string }>();
   const nav = useNavigate();
 
-  const { user } = useAuth();
-  const currentUserUid = user?.uid ?? null;
-
-  const { isMobile } = useApp();
-  const wordItemRatio = isMobile ? 0.75 : 0.92;
-  const wordItemPaddingVertical = 3.2;
-  const wordItemHeight = DefaultWordItemHeight * wordItemRatio + wordItemPaddingVertical;
-  const wordItemFontSize = `${wordItemRatio}rem`;
-
   const [text, setText] = useState<string>('');
+  const [currentUserUid, setCurrentUserUid] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
 
   // 한 페이지에 최대 단어 수
-  const [pageSize, setPageSize] = useState<PageSize>(computeInitialPageSize(120, wordItemHeight));
+  const [pageSize, setPageSize] = useState<PageSize>(
+    computeInitialPageSize(120, 23.4),
+  );
   const [pageIndex, setPageIndex] = useState(0); // 0-based
 
-  // 🔹 북마크 상태 (단어 인덱스 기반)
-  const [bookmarkWordIndex, setBookmarkWordIndex] = useState<number | null>(null);
-  const [bookmarkId, setBookmarkId] = useState<string | null>(null); // 랜덤 ID
-  const [bookmarksLoaded, setBookmarksLoaded] = useState(false);     // RTDB 읽기 완료?
-  const [initialPageApplied, setInitialPageApplied] = useState(false); // 북마크 반영 완료?
+  // 🔹 북마크 상태
+  const [bookmarkWordIndex, setBookmarkWordIndex] = useState<number | null>(
+    null,
+  );
+  const [bookmarkId, setBookmarkId] = useState<string | null>(null); // (RTDB only)
+  const [bookmarksLoaded, setBookmarksLoaded] = useState(false);
+  const [initialPageApplied, setInitialPageApplied] = useState(false);
 
   // 🔹 코어 영역 UI 상태
-  const [coreVisible, setCoreVisible] = useState(false); // 첫 로딩 페이드인
-  const [isCoreHovered, setIsCoreHovered] = useState(false);
-  const [coreDevCursor, setCoreDevCursor] = useState<{ x: number; y: number } | null>(null);
+  const [coreVisible, setCoreVisible] = useState(false);
+
+  // 🔹 검색/셔플 상태 (북마크에 함께 저장)
+  const [searchQuery, setSearchQuery] = useState<string>(''); // '' = no filter
+  const [shuffleWordIndices, setShuffleWordIndices] = useState<number[] | null>(
+    null,
+  );
 
   const wordbookPath = uid ? getDefaultWordbookPath(uid) : null;
 
-  function renderBracketsWithDepth(text: string): JSX.Element[] {
-    const out: JSX.Element[] = [];
+  // -------------------------
+  // Auth
+  // -------------------------
+  useEffect(() => {
+    const unsub = onAuthStateChanged(auth, user => {
+      setCurrentUserUid(user?.uid ?? null);
+    });
+    return () => unsub();
+  }, []);
 
-    // [ ] depth만 추적
-    let squareDepth = 0;
-
-    // [ ] depth별 색 클래스 (원하는 만큼 늘려도 됨)
-    const squareDepthClasses = [
-      'wf-sq-depth-0',
-      'wf-sq-depth-1',
-      'wf-sq-depth-2',
-      'wf-sq-depth-3',
-      'wf-sq-depth-4',
-    ];
-
-    for (let i = 0; i < text.length; i++) {
-      const ch = text[i];
-
-      // [ ] : depth 기반
-      if (ch === '[') {
-        const cls = squareDepthClasses[squareDepth % squareDepthClasses.length];
-        out.push(
-          <span key={i} className={`wf-br ${cls}`}>
-            [
-          </span>,
-        );
-        squareDepth += 1;
-        continue;
-      }
-
-      if (ch === ']') {
-        // 닫는 괄호는 depth 감소 후 색 결정 (짝이 같은 색이 됨)
-        squareDepth = Math.max(0, squareDepth - 1);
-        const cls = squareDepthClasses[squareDepth % squareDepthClasses.length];
-        out.push(
-          <span key={i} className={`wf-br ${cls}`}>
-            ]
-          </span>,
-        );
-        continue;
-      }
-
-      // 다른 괄호들: 고정색
-      if (ch === '(' || ch === ')') {
-        out.push(
-          <span key={i} className="wf-br wf-paren">
-            {ch}
-          </span>,
-        );
-        continue;
-      }
-
-      if (ch === '{' || ch === '}') {
-        out.push(
-          <span key={i} className="wf-br wf-brace">
-            {ch}
-          </span>,
-        );
-        continue;
-      }
-
-      if (ch === '<' || ch === '>') {
-        out.push(
-          <span key={i} className="wf-br wf-angle">
-            {ch}
-          </span>,
-        );
-        continue;
-      }
-
-      // 일반 문자
-      out.push(<span key={i}>{ch}</span>);
-    }
-
-    return out;
-  }
-
-  // Storage에서 wordbook 텍스트 로드
+  // -------------------------
+  // Storage: wordbook text load
+  // -------------------------
   useEffect(() => {
     if (!uid) return;
 
@@ -151,16 +82,12 @@ export function WordListPage() {
         setError(null);
       } catch (e: any) {
         console.error(e);
-
         if (e.code === 'storage/object-not-found') {
-          // 🔹 파일이 없으면 "에러" 대신 그냥 빈 단어장으로 시작
-          setText('');
-          setError(null);
+          setError('해당 단어장을 찾을 수 없습니다.');
         } else {
-          // 진짜 오류일 때만 에러 표시
-          setText('');
           setError('단어장을 불러오는 중 오류가 발생했습니다.');
         }
+        setText('');
       } finally {
         setLoading(false);
       }
@@ -169,26 +96,177 @@ export function WordListPage() {
     fetchText();
   }, [uid]);
 
-  // 🔹 RTDB 북마크 1회 읽기 (랜덤 bookmarkId 기반, wordIndex 사용)
+  // -------------------------
+  // Helpers: parse lines
+  // -------------------------
+  const rawLines = useMemo(() => {
+    return text.split('\n').filter(l => l.trim() !== '');
+  }, [text]);
+
+  /**
+   * 필터/셔플 적용 후 “보기용 순서”를 만든다.
+   * - searchQuery: 포함 문자열 필터 (word + link 전체 line 기준; 원하면 word만으로 바꿔도 됨)
+   * - shuffleWordIndices: “원본 인덱스 배열”
+   *
+   * 규칙:
+   * - 배열에 있는 인덱스 중 존재하지 않는 건 skip
+   * - 배열 길이까지만 셔플 적용 + 이후 추가된 단어는 자연 순서로 뒤에 붙음
+   */
+  const viewIndices = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+
+    // 1) base indices: filter
+    const base: number[] = [];
+    for (let i = 0; i < rawLines.length; i++) {
+      const line = rawLines[i];
+      if (!q) {
+        base.push(i);
+      } else {
+        if (line.toLowerCase().includes(q)) base.push(i);
+      }
+    }
+
+    // 2) shuffle 적용
+    if (!shuffleWordIndices || shuffleWordIndices.length === 0) {
+      return base;
+    }
+
+    const baseSet = new Set(base);
+    const used = new Set<number>();
+    const ordered: number[] = [];
+
+    // shuffle 배열 순서대로 “base에 존재하는 것만”
+    for (const idx of shuffleWordIndices) {
+      if (!baseSet.has(idx)) continue;
+      if (idx < 0 || idx >= rawLines.length) continue;
+      if (used.has(idx)) continue;
+      ordered.push(idx);
+      used.add(idx);
+    }
+
+    // 나머지는 자연 순서로 append (추가된 단어 포함)
+    for (const idx of base) {
+      if (used.has(idx)) continue;
+      ordered.push(idx);
+      used.add(idx);
+    }
+
+    return ordered;
+  }, [rawLines, searchQuery, shuffleWordIndices]);
+
+  const viewLines = useMemo(() => {
+    return viewIndices.map(i => rawLines[i]);
+  }, [rawLines, viewIndices]);
+
+  // -------------------------
+  // Unified bookmark save (RTDB / IDB)
+  // -------------------------
+  function normalizeBookmark(bk: Bookmark): Bookmark {
+    // RTDB undefined 금지 → 깊게 제거
+    return stripUndefinedDeep(bk);
+  }
+
+  const saveBookmarkUnified = useCallback(async (next: Partial<Bookmark>) => {
+    if (!wordbookPath) return;
+
+    // 반드시 값이 들어가도록(=undefined 금지)
+    const wordIndex =
+      typeof next.wordIndex === 'number' && Number.isFinite(next.wordIndex)
+        ? next.wordIndex
+        : 0;
+
+    const bk: Bookmark = normalizeBookmark({
+      wordbookPath,
+      wordIndex,
+      updatedAt: Date.now(),
+      // ''도 저장 가능. 다만 undefined는 저장 금지 → normalize가 제거.
+      searchQuery:
+        next.searchQuery !== undefined ? next.searchQuery : searchQuery,
+      shuffleWordIndices:
+        next.shuffleWordIndices !== undefined
+          ? next.shuffleWordIndices
+          : shuffleWordIndices ?? undefined,
+    });
+
+    // 로그인 → RTDB
+    if (currentUserUid) {
+      const viewerUid = currentUserUid;
+      const basePath = `voca/${VITE_VOCA_ENV}/users/${viewerUid}/bookmarks`;
+      const baseRef = rtdbRef(database, basePath);
+
+      let id = bookmarkId;
+      if (!id) {
+        const newRef = push(baseRef);
+        id = newRef.key!;
+        setBookmarkId(id);
+      }
+
+      const bkRef = rtdbRef(database, `${basePath}/${id}`);
+
+      // 여기서 undefined 들어가면 안됨 (normalizeBookmark로 방지)
+      await rtdbSet(bkRef, bk);
+
+      return;
+    }
+
+    // 비로그인 → IDB (guest-only)
+    await idbSetBookmark(bk, null);
+  }, [bookmarkId, currentUserUid, searchQuery, shuffleWordIndices, wordbookPath]);
+
+  // 북마크 읽기 트리거
   useEffect(() => {
-    if (!currentUserUid || !uid || !wordbookPath) return;
+    if (!uid || !wordbookPath) return;
 
     let cancelled = false;
 
-    const fetchBookmark = async () => {
+    const loadBookmarkUnified = async () => {
+      // 비로그인 → IDB
+      if (!currentUserUid) {
+        try {
+          const bk = await idbGetBookmark(wordbookPath, null);
+          if (cancelled) return;
+
+          if (bk) {
+            setBookmarkWordIndex(
+              typeof bk.wordIndex === 'number' ? bk.wordIndex : 0
+            );
+            setSearchQuery(
+              typeof bk.searchQuery === 'string' ? bk.searchQuery : ''
+            );
+            setShuffleWordIndices(
+              Array.isArray(bk.shuffleWordIndices) ? bk.shuffleWordIndices : null
+            );
+          } else {
+            setBookmarkWordIndex(null);
+            setSearchQuery('');
+            setShuffleWordIndices(null);
+          }
+        } catch (e) {
+          console.error('[IDB] load failed', e);
+          if (!cancelled) {
+            setBookmarkWordIndex(null);
+            setSearchQuery('');
+            setShuffleWordIndices(null);
+          }
+        } finally {
+          if (!cancelled) setBookmarksLoaded(true);
+        }
+        return;
+      }
+
+      // 로그인 → RTDB
       try {
         const viewerUid = currentUserUid;
         const basePath = `voca/${VITE_VOCA_ENV}/users/${viewerUid}/bookmarks`;
-        const dbRef = rtdbRef(database, basePath);
-
-        const snap = await get(dbRef);
+        const snap = await get(rtdbRef(database, basePath));
+        if (cancelled) return;
 
         if (!snap.exists()) {
-          if (!cancelled) {
-            setBookmarkId(null);
-            setBookmarkWordIndex(null);
-            setBookmarksLoaded(true);
-          }
+          setBookmarkId(null);
+          setBookmarkWordIndex(null);
+          setSearchQuery('');
+          setShuffleWordIndices(null);
+          setBookmarksLoaded(true);
           return;
         }
 
@@ -202,170 +280,141 @@ export function WordListPage() {
           }
         }
 
-        if (!cancelled) {
-          if (best) {
-            setBookmarkId(best.key);
-            setBookmarkWordIndex(best.data.wordIndex ?? 0);
-          } else {
-            setBookmarkId(null);
-            setBookmarkWordIndex(null);
-          }
+        if (!best) {
+          setBookmarkId(null);
+          setBookmarkWordIndex(null);
+          setSearchQuery('');
+          setShuffleWordIndices(null);
           setBookmarksLoaded(true);
+          return;
         }
+
+        setBookmarkId(best.key);
+        setBookmarkWordIndex(best.data.wordIndex ?? 0);
+        setSearchQuery(best.data.searchQuery ?? '');
+        setShuffleWordIndices(
+          Array.isArray(best.data.shuffleWordIndices)
+            ? best.data.shuffleWordIndices
+            : null
+        );
+        setBookmarksLoaded(true);
       } catch (e) {
-        console.error('[RTDB] get bookmark error', e);
+        console.error('[RTDB] load failed', e);
         if (!cancelled) {
           setBookmarkId(null);
           setBookmarkWordIndex(null);
+          setSearchQuery('');
+          setShuffleWordIndices(null);
           setBookmarksLoaded(true);
         }
       }
     };
 
-    fetchBookmark();
+    setBookmarksLoaded(false);
+    setInitialPageApplied(false);
+    loadBookmarkUnified();
 
     return () => {
       cancelled = true;
-      setBookmarkId(null);
-      setBookmarkWordIndex(null);
-      setBookmarksLoaded(false);
-      setInitialPageApplied(false);
     };
-  }, [currentUserUid, uid, wordbookPath]);
+  }, [uid, wordbookPath, currentUserUid]);
 
+  // -------------------------
   // 🔹 북마크(wordIndex) → 초기 pageIndex 반영 (딱 1번)
+  // - “보기용(viewLines)” 기준으로 계산
+  // -------------------------
   useEffect(() => {
+    if (loading) return;                // text 로딩 끝난 다음에만
     if (!bookmarksLoaded) return;
     if (initialPageApplied) return;
-    if (!text) return;
 
-    const allLines = text.split('\n').filter(l => l.trim() !== '');
-    if (allLines.length === 0) {
+    // viewLines는 text+검색+셔플이 반영된 “현재 보기”
+    if (!viewLines) return;
+
+    // text 로딩은 끝났는데 단어가 진짜 0개인 경우만 여기서 적용 완료 처리
+    if (viewLines.length === 0) {
+      setPageIndex(0);
       setInitialPageApplied(true);
       return;
     }
 
-    // 북마크 없음 → 기본 0페이지 유지
+    // 북마크 없음 → 0페이지
     if (bookmarkWordIndex == null) {
+      setPageIndex(0);
       setInitialPageApplied(true);
       return;
     }
 
-    // 북마크 있는 경우: wordIndex → pageIndex 환산
     let idx = bookmarkWordIndex;
     if (idx < 0) idx = 0;
-    if (idx >= allLines.length) idx = allLines.length - 1;
+    if (idx >= viewLines.length) idx = viewLines.length - 1;
 
-    const totalPages = Math.max(1, Math.ceil(allLines.length / pageSize));
+    const totalPages = Math.max(1, Math.ceil(viewLines.length / pageSize));
     let newPageIndex = Math.floor(idx / pageSize);
     if (newPageIndex < 0) newPageIndex = 0;
     if (newPageIndex >= totalPages) newPageIndex = totalPages - 1;
 
     setPageIndex(newPageIndex);
     setInitialPageApplied(true);
-  }, [bookmarksLoaded, initialPageApplied, text, bookmarkWordIndex, pageSize]);
+  }, [
+    loading,                // 추가
+    bookmarksLoaded,
+    initialPageApplied,
+    bookmarkWordIndex,
+    viewLines,
+    pageSize,
+  ]);
+  
 
-  // 🔹 페이지 바뀔 때마다 북마크 저장 (초기 로딩이 끝난 뒤부터)
+  // -------------------------
+  // 페이지 변경 시 저장 (RTDB/IDB 모두)
+  // -------------------------
   useEffect(() => {
     if (!bookmarksLoaded || !initialPageApplied) return;
+    if (!uid || !wordbookPath) return;
 
-    if (!currentUserUid || !uid || !wordbookPath) return;
-    if (!text) return;
+    // viewLines 기준으로 저장
+    if (viewLines.length === 0) return;
 
-    const allLines = text.split('\n').filter(l => l.trim() !== '');
-    if (allLines.length === 0) return;
-
-    const { safePageIndex } = paginate(allLines, pageSize, pageIndex);
+    const { safePageIndex } = paginate(viewLines, pageSize, pageIndex);
     const wordIndex = safePageIndex * pageSize;
 
-    const viewerUid = currentUserUid;
-    const basePath = `voca/${VITE_VOCA_ENV}/users/${viewerUid}/bookmarks`;
-    const baseRef = rtdbRef(database, basePath);
-
-    let id = bookmarkId;
-    if (!id) {
-      const newRef = push(baseRef);
-      id = newRef.key!;
-      setBookmarkId(id);
-    }
-
-    const bkRef = rtdbRef(database, `${basePath}/${id}`);
-    const bookmark: Bookmark = {
-      wordbookPath,
-      wordIndex,
-      updatedAt: Date.now(),
-    };
-
-    rtdbSet(bkRef, bookmark).catch(err => {
-      console.error('[RTDB] write error', err);
+    saveBookmarkUnified({ wordIndex }).catch(err => {
+      console.error('[Bookmark] save failed', err);
     });
-
-    onDisconnect(bkRef)
-      .set(bookmark)
-      .catch(err => {
-        console.error('[RTDB] onDisconnect error', err);
-      });
   }, [
     pageIndex,
     pageSize,
-    text,
-    currentUserUid,
     uid,
     wordbookPath,
-    bookmarkId,
     bookmarksLoaded,
     initialPageApplied,
+    currentUserUid,
+    searchQuery,
+    shuffleWordIndices,
+    viewLines,
+    saveBookmarkUnified,
   ]);
 
-  // 🔹 코어 영역 페이드인
+  // -------------------------
+  // UI: core fade in
+  // -------------------------
   useEffect(() => {
-    if (!loading && !error) {
-      setCoreVisible(true);
-    }
+    if (!loading && !error) setCoreVisible(true);
   }, [loading, error]);
 
-  // 🔹 코어 영역 hover / 마우스 이동 핸들러 (DEV 전용 툴팁용)
-  const handleCoreMouseEnter = () => {
-    setIsCoreHovered(true);
-  };
-
-  const handleCoreMouseLeave = () => {
-    setIsCoreHovered(false);
-    setCoreDevCursor(null);
-  };
-
-  const handleCoreMouseMove = (e: MouseEvent<HTMLDivElement>) => {
-    if (!import.meta.env.DEV) return;
-    setCoreDevCursor({ x: e.clientX, y: e.clientY });
-  };
-
-  if (error) {
-    return (
-      <div className="container py-5">
-        <p>{error}</p>
-        <Link to={ROUTE_SIGN_IN} className="link-light">
-          로그인 페이지로 이동
-        </Link>
-      </div>
-    );
-  }
-
-  if (loading) {
-    return (
-      <div className="container py-5">
-        <p>로딩 중...</p>
-      </div>
-    );
-  }
-
-  const lines = text.split('\n').filter(l => l.trim() !== '');
+  // -------------------------
+  // Navigation actions
+  // -------------------------
+  const canEdit = currentUserUid === uid;
+  const isLoggedIn = !!currentUserUid;
 
   const {
     totalPages,
     safePageIndex,
     pageStart,
     pagedItems: pagedLines,
-  } = paginate(lines, pageSize, pageIndex);
+  } = paginate(viewLines, pageSize, pageIndex);
 
   const hasPages = totalPages > 0;
   const canCycle = totalPages > 1;
@@ -397,6 +446,88 @@ export function WordListPage() {
     setPageIndex(prev => (prev < totalPages - 1 ? prev + 1 : 0));
   };
 
+  // -------------------------
+  // Search handlers (검색 시 페이지 초기화 + 즉시 북마크 저장)
+  // -------------------------
+  const handleSearchChange = (raw: string) => {
+    const q = raw; // 필요하면 정책적으로 trim 해도 됨: raw.trim()
+
+    // ✅ UI: 검색어 반영
+    setSearchQuery(q);
+
+    // ✅ 규칙: 검색 변경 시 셔플은 무조건 해제
+    if (shuffleWordIndices !== null) {
+      setShuffleWordIndices(null);
+    }
+
+    // ✅ 검색하면 위치 초기화 (pageIndex 기반이라도 결국 wordIndex=0 저장)
+    setPageIndex(0);
+
+    // ✅ 북마크에 즉시 기록 (undefined 절대 금지: null 명시)
+    saveBookmarkUnified({
+      wordIndex: 0,
+      searchQuery: q,
+      shuffleWordIndices: null,
+    }).catch(err => console.error('[bookmark] save on search change', err));
+  };
+
+  // -------------------------
+  // Shuffle handlers (파일 변경 X, 북마크 레벨에서만 셔플)
+  // -------------------------
+  const handleShuffle = () => {
+    const q = searchQuery.trim().toLowerCase();
+    const filterOnly: number[] = [];
+    for (let i = 0; i < rawLines.length; i++) {
+      const line = rawLines[i];
+      if (!q || line.toLowerCase().includes(q)) filterOnly.push(i);
+    }
+
+    // Fisher-Yates
+    for (let i = filterOnly.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [filterOnly[i], filterOnly[j]] = [filterOnly[j], filterOnly[i]];
+    }
+
+    setShuffleWordIndices(filterOnly);
+    setPageIndex(0);
+
+    // “셔플 누르는 순간” 북마크에 기록
+    saveBookmarkUnified({ wordIndex: 0, shuffleWordIndices: filterOnly }).catch(
+      err => console.error('[Bookmark] save shuffle failed', err),
+    );
+  };
+
+  const handleShuffleClear = () => {
+    setShuffleWordIndices(null);
+    setPageIndex(0);
+
+    saveBookmarkUnified({ wordIndex: 0, shuffleWordIndices: [] }).catch(err =>
+      console.error('[Bookmark] clear shuffle failed', err),
+    );
+  };
+
+  // -------------------------
+  // Render states
+  // -------------------------
+  if (error) {
+    return (
+      <div className="container py-5">
+        <p>{error}</p>
+        <Link to={ROUTE_SIGN_IN} className="link-light">
+          로그인 페이지로 이동
+        </Link>
+      </div>
+    );
+  }
+
+  if (loading) {
+    return (
+      <div className="container py-5">
+        <p>로딩 중...</p>
+      </div>
+    );
+  }
+
   return (
     <div
       className="container wordlist-root"
@@ -410,10 +541,7 @@ export function WordListPage() {
       }}
     >
       {/* 최상단: 코어 타이틀 중앙 + 햄버거 메뉴 우측 상단 */}
-      <div
-        className="position-relative mb-3"
-        style={{ minHeight: 40 }}
-      >
+      <div className="position-relative mb-3" style={{ minHeight: 40 }}>
         {/* 가운데 정렬된 코어 타이틀 */}
         <div className="d-flex justify-content-center">
           <div className="wordlist-core-title">
@@ -424,14 +552,48 @@ export function WordListPage() {
           </div>
         </div>
 
-        {/* 햄버거 메뉴: 로그인 여부 / 본인 여부에 따라 내용 분기 */}
-        <div
-          className="position-absolute"
-          style={{ top: 0, right: 0 }}
-        >
+        {/* 햄버거: 비로그인/로그인 모두 보여주기(복원) */}
+        <div className="position-absolute" style={{ top: 0, right: 0 }}>
           <HamburgerMenu>
-            {/* 1) 로그인 안 된 경우: 로그인 버튼만 */}
-            {!currentUserUid && (
+            {/* 셔플: 로그인/비로그인 모두 가능 */}
+            <li>
+              <button className="dropdown-item" type="button" onClick={handleShuffle}>
+                단어 섞기
+              </button>
+            </li>
+
+            {shuffleWordIndices && shuffleWordIndices.length > 0 && (
+              <li>
+                <button
+                  className="dropdown-item"
+                  type="button"
+                  onClick={handleShuffleClear}
+                >
+                  단어 섞기 해제
+                </button>
+              </li>
+            )}
+
+            {/* 편집(본인만) */}
+            {canEdit && (
+              <>
+                <li>
+                  <button
+                    className="dropdown-item"
+                    type="button"
+                    onClick={() => nav(generatePath(ROUTE_USER_WORDS_EDIT, { uid }))}
+                  >
+                    단어장 수정
+                  </button>
+                </li>
+              </>
+            )}
+
+            <HamburgerDivider />
+
+            {isLoggedIn ? (
+              <LogoutButton />
+            ):(
               <li>
                 <button
                   className="dropdown-item"
@@ -441,48 +603,6 @@ export function WordListPage() {
                   로그인
                 </button>
               </li>
-            )}
-
-            {/* 2) 로그인 + 본인 단어장인 경우: 단어장 수정 + 로그아웃 */}
-            {currentUserUid && currentUserUid === uid && (
-              <>
-                <li>
-                  <button
-                    className="dropdown-item"
-                    type="button"
-                    onClick={() =>
-                      nav(generatePath(ROUTE_USER_WORDS_EDIT, { uid }))
-                    }
-                  >
-                    단어장 수정
-                  </button>
-                </li>
-
-                <HamburgerDivider />
-
-                <LogoutButton />
-              </>
-            )}
-
-            {/* 3) 로그인 + 남의 단어장인 경우: 내 단어장으로 이동 + 로그아웃 */}
-            {currentUserUid && uid && currentUserUid !== uid && (
-              <>
-                <li>
-                  <button
-                    className="dropdown-item"
-                    type="button"
-                    onClick={() =>
-                      nav(generatePath(ROUTE_USER_WORDS, { uid: currentUserUid }))
-                    }
-                  >
-                    내 단어장으로 이동
-                  </button>
-                </li>
-
-                <HamburgerDivider />
-
-                <LogoutButton />
-              </>
             )}
           </HamburgerMenu>
         </div>
@@ -514,9 +634,6 @@ export function WordListPage() {
             'wordlist-core-zone',
             coreVisible ? 'wordlist-core-zone-visible' : '',
           ].join(' ')}
-          onMouseEnter={handleCoreMouseEnter}
-          onMouseLeave={handleCoreMouseLeave}
-          onMouseMove={handleCoreMouseMove}
           style={{
             flexShrink: 0,
             maxWidth: 720,
@@ -534,57 +651,54 @@ export function WordListPage() {
               className="wordlist-core-list"
             >
               {(() => {
-                if (lines.length === 0) {
+                if (viewLines.length === 0) {
                   return (
                     <li
                       style={{ padding: '4px 6px', fontSize: '0.9rem' }}
                       className="text-secondary"
                     >
-                      단어가 없습니다. 에디터에서 단어를 추가해 주세요.
+                      {rawLines.length === 0
+                        ? '단어가 없습니다. 에디터에서 단어를 추가해 주세요.'
+                        : '검색 결과가 없습니다.'}
                     </li>
                   );
                 }
 
                 const items: JSX.Element[] = [];
 
-                const isLastPage =
-                  totalPages > 0 && safePageIndex === totalPages - 1;
+                const isLastPage = totalPages > 0 && safePageIndex === totalPages - 1;
                 const realCount = pagedLines.length;
-                const padCount = isLastPage
-                  ? Math.max(0, pageSize - realCount)
-                  : 0;
+                const padCount = isLastPage ? Math.max(0, pageSize - realCount) : 0;
 
                 // 실제 단어 라인
                 pagedLines.forEach((line: string, localIdx: number) => {
-                  const idx = pageStart + localIdx;
+                  // pageStart/localIdx는 “viewLines 기준”
+                  const viewIdx = pageStart + localIdx;
+
                   const parts = line.split(SEP);
                   const word = parts[0]?.trim();
                   const link = parts[1]?.trim();
                   const hasLink = !!link;
 
                   items.push(
-                    <li
-                      key={idx}
-                      className="wordlist-core-item"
-                      style={{fontSize: wordItemFontSize}}
-                    >
+                    <li key={`view-${viewIdx}`} className="wordlist-core-item">
                       {hasLink ? (
                         <a
                           href={link}
                           className="text-decoration-none wordlist-core-link"
                         >
-                          <span className="fw-bold">{renderBracketsWithDepth(word)}</span>
+                          <span className="fw-bold">{word}</span>
                         </a>
                       ) : (
                         <span className="fw-bold text-light wordlist-core-word">
-                          {renderBracketsWithDepth(word)}
+                          {word}
                         </span>
                       )}
                     </li>,
                   );
                 });
 
-                // 마지막 페이지면 빈 줄로 패딩해서 꽉 채우기
+                // 마지막 페이지면 빈 줄로 패딩
                 for (let i = 0; i < padCount; i++) {
                   items.push(
                     <li
@@ -620,6 +734,18 @@ export function WordListPage() {
         </div>
       </div>
 
+      {/* 페이지네이션 바로 위: 검색란 */}
+      <div className="d-flex justify-content-center mb-2">
+        <div style={{ width: '100%', maxWidth: 720 }}>
+          <input
+            className="form-control bg-black text-light"
+            placeholder="검색 (포함 문자열 필터)"
+            value={searchQuery}
+            onChange={e => handleSearchChange(e.target.value)}
+          />
+        </div>
+      </div>
+
       {/* 최하단: 페이지네이션 컨트롤 */}
       <div className="mt-auto pt-2 d-flex flex-column align-items-center">
         <PaginationControls
@@ -629,28 +755,12 @@ export function WordListPage() {
           onPageSizeChange={size => {
             setPageSize(size);
             setPageIndex(0);
+            // 페이지 사이즈 바꾸면 저장도 같이
+            saveBookmarkUnified({ wordIndex: 0 }).catch(console.error);
           }}
           onPageIndexChange={setPageIndex}
         />
       </div>
-
-      {/* 🔹 개발 모드 전용: 마우스 커서 옆에 Core Zone 툴팁 */}
-      {VITE_VOCA_ENV !== VocaEnv.Prod && isCoreHovered && coreDevCursor && (
-        <div
-          className="wordlist-core-dev-badge"
-          style={{
-            position: 'fixed',
-            left: coreDevCursor.x + 12,
-            top: coreDevCursor.y + 12,
-            zIndex: 9999,
-            pointerEvents: 'none',
-            width: 'fit-content',
-            whiteSpace: 'nowrap',
-          }}
-        >
-          Core Zone
-        </div>
-      )}
     </div>
   );
 }
