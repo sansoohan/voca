@@ -1,5 +1,5 @@
 // WordListPage.tsx
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useNavigate, Link, generatePath } from 'react-router-dom';
 import { ref as storageRef, getDownloadURL } from 'firebase/storage';
 import { ref as rtdbRef, get, push, set as rtdbSet } from 'firebase/database';
@@ -50,6 +50,9 @@ export function WordListPage() {
   // 🔹 검색/셔플 상태 (북마크에 함께 저장)
   const [searchQuery, setSearchQuery] = useState<string>(''); // '' = no filter
   const [shuffleWordIndices, setShuffleWordIndices] = useState<number[] | null>(null);
+
+  // ✅ 로그인/로그아웃 전환 프레임에서는 저장 금지하기 위한 ref
+  const prevAuthUidRef = useRef<string | null | undefined>(undefined);
 
   const wordbookPath = uid ? getDefaultWordbookPath(uid) : null;
 
@@ -345,6 +348,18 @@ export function WordListPage() {
     if (!bookmarksLoaded || !initialPageApplied) return;
     if (!uid || !wordbookPath) return;
 
+    // ✅ auth 전환(로그인/로그아웃) 프레임에서는 저장 금지
+    // - 첫 실행(undef)도 스킵해서 "초기 로딩 직후 불필요 저장"도 줄임
+    const prevUid = prevAuthUidRef.current;
+    if (prevUid === undefined) {
+      prevAuthUidRef.current = currentUserUid ?? null;
+      return;
+    }
+    if (prevUid !== (currentUserUid ?? null)) {
+      prevAuthUidRef.current = currentUserUid ?? null;
+      return;
+    }
+
     // viewLines 기준으로 저장
     if (viewLines.length === 0) return;
 
@@ -361,9 +376,7 @@ export function WordListPage() {
     wordbookPath,
     bookmarksLoaded,
     initialPageApplied,
-    currentUserUid,
-    searchQuery,
-    shuffleWordIndices,
+    currentUserUid, // ✅ auth 전환 감지용(guard)
     viewLines,
     saveBookmark,
   ]);
