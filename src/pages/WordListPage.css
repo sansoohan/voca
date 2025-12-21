@@ -203,3 +203,23 @@
     max-width: 100%;
   }
 }
+
+
+
+/* 공통: 괄호 문자는 에디터 느낌 */
+.wf-br {
+  font-weight: 700;
+  text-shadow: 0 0 6px rgba(255,255,255,0.12);
+}
+
+/* [ ] depth별 색 */
+.wf-sq-depth-0 { color: #aa0000; }
+.wf-sq-depth-1 { color: #ff00ff; }
+.wf-sq-depth-2 { color: #ffff00; }
+.wf-sq-depth-3 { color: #00ff00; }
+.wf-sq-depth-4 { color: #cdb4ff; }
+
+/* 나머지 괄호 고정색 */
+.wf-paren { color: #ffff00; }  /* ( ) */
+.wf-brace { color: #ff0000; }  /* { } */
+.wf-angle { color: #00ccff; }  /* < > */

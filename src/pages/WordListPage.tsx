@@ -58,6 +58,83 @@ export function WordListPage() {
 
   const wordbookPath = uid ? getDefaultWordbookPath(uid) : null;
 
+  function renderBracketsWithDepth(text: string): JSX.Element[] {
+    const out: JSX.Element[] = [];
+
+    // [ ] depth만 추적
+    let squareDepth = 0;
+
+    // [ ] depth별 색 클래스 (원하는 만큼 늘려도 됨)
+    const squareDepthClasses = [
+      'wf-sq-depth-0',
+      'wf-sq-depth-1',
+      'wf-sq-depth-2',
+      'wf-sq-depth-3',
+      'wf-sq-depth-4',
+    ];
+
+    for (let i = 0; i < text.length; i++) {
+      const ch = text[i];
+
+      // [ ] : depth 기반
+      if (ch === '[') {
+        const cls = squareDepthClasses[squareDepth % squareDepthClasses.length];
+        out.push(
+          <span key={i} className={`wf-br ${cls}`}>
+            [
+          </span>,
+        );
+        squareDepth += 1;
+        continue;
+      }
+
+      if (ch === ']') {
+        // 닫는 괄호는 depth 감소 후 색 결정 (짝이 같은 색이 됨)
+        squareDepth = Math.max(0, squareDepth - 1);
+        const cls = squareDepthClasses[squareDepth % squareDepthClasses.length];
+        out.push(
+          <span key={i} className={`wf-br ${cls}`}>
+            ]
+          </span>,
+        );
+        continue;
+      }
+
+      // 다른 괄호들: 고정색
+      if (ch === '(' || ch === ')') {
+        out.push(
+          <span key={i} className="wf-br wf-paren">
+            {ch}
+          </span>,
+        );
+        continue;
+      }
+
+      if (ch === '{' || ch === '}') {
+        out.push(
+          <span key={i} className="wf-br wf-brace">
+            {ch}
+          </span>,
+        );
+        continue;
+      }
+
+      if (ch === '<' || ch === '>') {
+        out.push(
+          <span key={i} className="wf-br wf-angle">
+            {ch}
+          </span>,
+        );
+        continue;
+      }
+
+      // 일반 문자
+      out.push(<span key={i}>{ch}</span>);
+    }
+
+    return out;
+  }
+
   // Storage에서 wordbook 텍스트 로드
   useEffect(() => {
     if (!uid) return;
@@ -496,11 +573,11 @@ export function WordListPage() {
                           href={link}
                           className="text-decoration-none wordlist-core-link"
                         >
-                          <span className="fw-bold">{word}</span>
+                          <span className="fw-bold">{renderBracketsWithDepth(word)}</span>
                         </a>
                       ) : (
                         <span className="fw-bold text-light wordlist-core-word">
-                          {word}
+                          {renderBracketsWithDepth(word)}
                         </span>
                       )}
                     </li>,
