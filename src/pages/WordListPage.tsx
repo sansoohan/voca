@@ -1,5 +1,5 @@
 // WordListPage.tsx
-import { useCallback, useEffect, useMemo, useState, type JSX } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams, useNavigate, Link, generatePath } from 'react-router-dom';
 import { ref as storageRef, getDownloadURL } from 'firebase/storage';
 import { ref as rtdbRef, get, push, set as rtdbSet } from 'firebase/database';
@@ -10,13 +10,15 @@ import { ROUTE_SIGN_IN, ROUTE_USER_WORDS_EDIT } from '~/constants/routes';
 import type { PageSize } from '~/types/editor';
 import { computeInitialPageSize, paginate } from '~/utils/editor';
 import { PaginationControls } from '~/components/PaginationControls';
-import { SEP } from '~/constants/editor';
 import { getDefaultWordbookPath } from '~/utils/storage';
 import { HamburgerMenu } from '~/components/HamburgerMenu';
 import { HamburgerDivider } from '~/components/HamburgerDivider';
 import { LogoutButton } from '~/components/LogoutButton';
-import { idbGetBookmark, idbSetBookmark, stripUndefinedDeep } from '~/utils/bookmarkIdb';
+import { readBookmarkIndexDb, updateBookmarkIndexDb, stripUndefinedDeep } from '~/utils/bookmarkIdb';
 import type { Bookmark } from '~/types/bookmark';
+import { useApp } from '~/contexts/AppContext';
+import { DefaultWordItemHeight } from '~/constants/editor';
+import { WordListFrame } from './WordListPage/components/WordListFrame';
 
 import './WordListPage.css';
 
@@ -29,28 +31,25 @@ export function WordListPage() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
 
+  const { isMobile } = useApp();
+  const wordItemRatio = isMobile ? 0.75 : 0.92;
+  const wordItemPaddingVertical = 3.2;
+  const wordItemHeight = DefaultWordItemHeight * wordItemRatio + wordItemPaddingVertical;
+  const wordItemFontSize = `${wordItemRatio}rem`;
+
   // 한 페이지에 최대 단어 수
-  const [pageSize, setPageSize] = useState<PageSize>(
-    computeInitialPageSize(120, 23.4),
-  );
+  const [pageSize, setPageSize] = useState<PageSize>(computeInitialPageSize(157, wordItemHeight));
   const [pageIndex, setPageIndex] = useState(0); // 0-based
 
   // 🔹 북마크 상태
-  const [bookmarkWordIndex, setBookmarkWordIndex] = useState<number | null>(
-    null,
-  );
+  const [bookmarkWordIndex, setBookmarkWordIndex] = useState<number | null>(null);
   const [bookmarkId, setBookmarkId] = useState<string | null>(null); // (RTDB only)
   const [bookmarksLoaded, setBookmarksLoaded] = useState(false);
   const [initialPageApplied, setInitialPageApplied] = useState(false);
 
-  // 🔹 코어 영역 UI 상태
-  const [coreVisible, setCoreVisible] = useState(false);
-
   // 🔹 검색/셔플 상태 (북마크에 함께 저장)
   const [searchQuery, setSearchQuery] = useState<string>(''); // '' = no filter
-  const [shuffleWordIndices, setShuffleWordIndices] = useState<number[] | null>(
-    null,
-  );
+  const [shuffleWordIndices, setShuffleWordIndices] = useState<number[] | null>(null);
 
   const wordbookPath = uid ? getDefaultWordbookPath(uid) : null;
 
@@ -158,34 +157,19 @@ export function WordListPage() {
     return viewIndices.map(i => rawLines[i]);
   }, [rawLines, viewIndices]);
 
-  // -------------------------
-  // Unified bookmark save (RTDB / IDB)
-  // -------------------------
-  function normalizeBookmark(bk: Bookmark): Bookmark {
-    // RTDB undefined 금지 → 깊게 제거
-    return stripUndefinedDeep(bk);
-  }
-
-  const saveBookmarkUnified = useCallback(async (next: Partial<Bookmark>) => {
+  const saveBookmark = useCallback(async (next: Partial<Bookmark>) => {
     if (!wordbookPath) return;
 
     // 반드시 값이 들어가도록(=undefined 금지)
-    const wordIndex =
-      typeof next.wordIndex === 'number' && Number.isFinite(next.wordIndex)
-        ? next.wordIndex
-        : 0;
+    const wordIndex = typeof next.wordIndex === 'number' && Number.isFinite(next.wordIndex) ? next.wordIndex : 0;
 
-    const bk: Bookmark = normalizeBookmark({
+    const bookmark = stripUndefinedDeep<Bookmark>({
       wordbookPath,
       wordIndex,
       updatedAt: Date.now(),
-      // ''도 저장 가능. 다만 undefined는 저장 금지 → normalize가 제거.
-      searchQuery:
-        next.searchQuery !== undefined ? next.searchQuery : searchQuery,
-      shuffleWordIndices:
-        next.shuffleWordIndices !== undefined
-          ? next.shuffleWordIndices
-          : shuffleWordIndices ?? undefined,
+      searchQuery: next.searchQuery !== undefined ? next.searchQuery : searchQuery,
+      shuffleWordIndices: next.shuffleWordIndices !== undefined
+        ? next.shuffleWordIndices : shuffleWordIndices ?? undefined,
     });
 
     // 로그인 → RTDB
@@ -201,16 +185,15 @@ export function WordListPage() {
         setBookmarkId(id);
       }
 
-      const bkRef = rtdbRef(database, `${basePath}/${id}`);
+      const bookmarkRef = rtdbRef(database, `${basePath}/${id}`);
 
-      // 여기서 undefined 들어가면 안됨 (normalizeBookmark로 방지)
-      await rtdbSet(bkRef, bk);
+      await rtdbSet(bookmarkRef, bookmark);
 
       return;
     }
 
     // 비로그인 → IDB (guest-only)
-    await idbSetBookmark(bk, null);
+    await updateBookmarkIndexDb(bookmark, null);
   }, [bookmarkId, currentUserUid, searchQuery, shuffleWordIndices, wordbookPath]);
 
   // 북마크 읽기 트리거
@@ -223,19 +206,13 @@ export function WordListPage() {
       // 비로그인 → IDB
       if (!currentUserUid) {
         try {
-          const bk = await idbGetBookmark(wordbookPath, null);
+          const bookmark = await readBookmarkIndexDb(wordbookPath, null);
           if (cancelled) return;
 
-          if (bk) {
-            setBookmarkWordIndex(
-              typeof bk.wordIndex === 'number' ? bk.wordIndex : 0
-            );
-            setSearchQuery(
-              typeof bk.searchQuery === 'string' ? bk.searchQuery : ''
-            );
-            setShuffleWordIndices(
-              Array.isArray(bk.shuffleWordIndices) ? bk.shuffleWordIndices : null
-            );
+          if (bookmark) {
+            setBookmarkWordIndex(typeof bookmark.wordIndex === 'number' ? bookmark.wordIndex : 0);
+            setSearchQuery(typeof bookmark.searchQuery === 'string' ? bookmark.searchQuery : '');
+            setShuffleWordIndices(Array.isArray(bookmark.shuffleWordIndices) ? bookmark.shuffleWordIndices : null);
           } else {
             setBookmarkWordIndex(null);
             setSearchQuery('');
@@ -292,11 +269,7 @@ export function WordListPage() {
         setBookmarkId(best.key);
         setBookmarkWordIndex(best.data.wordIndex ?? 0);
         setSearchQuery(best.data.searchQuery ?? '');
-        setShuffleWordIndices(
-          Array.isArray(best.data.shuffleWordIndices)
-            ? best.data.shuffleWordIndices
-            : null
-        );
+        setShuffleWordIndices(Array.isArray(best.data.shuffleWordIndices) ? best.data.shuffleWordIndices : null);
         setBookmarksLoaded(true);
       } catch (e) {
         console.error('[RTDB] load failed', e);
@@ -357,17 +330,16 @@ export function WordListPage() {
     setPageIndex(newPageIndex);
     setInitialPageApplied(true);
   }, [
-    loading,                // 추가
+    loading,
     bookmarksLoaded,
     initialPageApplied,
     bookmarkWordIndex,
     viewLines,
     pageSize,
   ]);
-  
 
   // -------------------------
-  // 페이지 변경 시 저장 (RTDB/IDB 모두)
+  // 페이지 변경 시 저장 (RTDB/IDB)
   // -------------------------
   useEffect(() => {
     if (!bookmarksLoaded || !initialPageApplied) return;
@@ -379,7 +351,7 @@ export function WordListPage() {
     const { safePageIndex } = paginate(viewLines, pageSize, pageIndex);
     const wordIndex = safePageIndex * pageSize;
 
-    saveBookmarkUnified({ wordIndex }).catch(err => {
+    saveBookmark({ wordIndex }).catch(err => {
       console.error('[Bookmark] save failed', err);
     });
   }, [
@@ -393,15 +365,8 @@ export function WordListPage() {
     searchQuery,
     shuffleWordIndices,
     viewLines,
-    saveBookmarkUnified,
+    saveBookmark,
   ]);
-
-  // -------------------------
-  // UI: core fade in
-  // -------------------------
-  useEffect(() => {
-    if (!loading && !error) setCoreVisible(true);
-  }, [loading, error]);
 
   // -------------------------
   // Navigation actions
@@ -449,22 +414,19 @@ export function WordListPage() {
   // -------------------------
   // Search handlers (검색 시 페이지 초기화 + 즉시 북마크 저장)
   // -------------------------
-  const handleSearchChange = (raw: string) => {
-    const q = raw; // 필요하면 정책적으로 trim 해도 됨: raw.trim()
-
-    // ✅ UI: 검색어 반영
+  const handleSearchChange = (q: string) => {
     setSearchQuery(q);
 
-    // ✅ 규칙: 검색 변경 시 셔플은 무조건 해제
+    // 규칙: 검색 변경 시 셔플은 무조건 해제
     if (shuffleWordIndices !== null) {
       setShuffleWordIndices(null);
     }
 
-    // ✅ 검색하면 위치 초기화 (pageIndex 기반이라도 결국 wordIndex=0 저장)
+    // 검색하면 위치 초기화 (pageIndex 기반이라도 결국 wordIndex=0 저장)
     setPageIndex(0);
 
-    // ✅ 북마크에 즉시 기록 (undefined 절대 금지: null 명시)
-    saveBookmarkUnified({
+    // 북마크에 즉시 기록 (undefined 절대 금지: null 명시)
+    saveBookmark({
       wordIndex: 0,
       searchQuery: q,
       shuffleWordIndices: null,
@@ -492,7 +454,7 @@ export function WordListPage() {
     setPageIndex(0);
 
     // “셔플 누르는 순간” 북마크에 기록
-    saveBookmarkUnified({ wordIndex: 0, shuffleWordIndices: filterOnly }).catch(
+    saveBookmark({ wordIndex: 0, shuffleWordIndices: filterOnly }).catch(
       err => console.error('[Bookmark] save shuffle failed', err),
     );
   };
@@ -501,7 +463,7 @@ export function WordListPage() {
     setShuffleWordIndices(null);
     setPageIndex(0);
 
-    saveBookmarkUnified({ wordIndex: 0, shuffleWordIndices: [] }).catch(err =>
+    saveBookmark({ wordIndex: 0, shuffleWordIndices: [] }).catch(err =>
       console.error('[Bookmark] clear shuffle failed', err),
     );
   };
@@ -540,9 +502,7 @@ export function WordListPage() {
         paddingBottom: '0.75rem',
       }}
     >
-      {/* 최상단: 코어 타이틀 중앙 + 햄버거 메뉴 우측 상단 */}
       <div className="position-relative mb-3" style={{ minHeight: 40 }}>
-        {/* 가운데 정렬된 코어 타이틀 */}
         <div className="d-flex justify-content-center">
           <div className="wordlist-core-title">
             <span className="wordlist-core-title-main">Word Flow Core</span>
@@ -552,10 +512,8 @@ export function WordListPage() {
           </div>
         </div>
 
-        {/* 햄버거: 비로그인/로그인 모두 보여주기(복원) */}
         <div className="position-absolute" style={{ top: 0, right: 0 }}>
           <HamburgerMenu>
-            {/* 셔플: 로그인/비로그인 모두 가능 */}
             <li>
               <button className="dropdown-item" type="button" onClick={handleShuffle}>
                 단어 섞기
@@ -574,7 +532,6 @@ export function WordListPage() {
               </li>
             )}
 
-            {/* 편집(본인만) */}
             {canEdit && (
               <>
                 <li>
@@ -627,94 +584,17 @@ export function WordListPage() {
           {hasPages ? prevPageNumber : ''}
         </div>
 
-        {/* 중앙 코어 영역 */}
-        <div
-          className={[
-            'bg-black',
-            'wordlist-core-zone',
-            coreVisible ? 'wordlist-core-zone-visible' : '',
-          ].join(' ')}
-          style={{
-            flexShrink: 0,
-            maxWidth: 720,
-            minWidth: 260,
-            borderRadius: 10,
-            padding: 6,
-            position: 'relative',
-            overflow: 'hidden',
-          }}
-        >
-          {/* 액자 느낌의 이너 프레임 */}
-          <div className="wordlist-core-frame">
-            <ul
-              key={safePageIndex}
-              className="wordlist-core-list"
-            >
-              {(() => {
-                if (viewLines.length === 0) {
-                  return (
-                    <li
-                      style={{ padding: '4px 6px', fontSize: '0.9rem' }}
-                      className="text-secondary"
-                    >
-                      {rawLines.length === 0
-                        ? '단어가 없습니다. 에디터에서 단어를 추가해 주세요.'
-                        : '검색 결과가 없습니다.'}
-                    </li>
-                  );
-                }
-
-                const items: JSX.Element[] = [];
-
-                const isLastPage = totalPages > 0 && safePageIndex === totalPages - 1;
-                const realCount = pagedLines.length;
-                const padCount = isLastPage ? Math.max(0, pageSize - realCount) : 0;
-
-                // 실제 단어 라인
-                pagedLines.forEach((line: string, localIdx: number) => {
-                  // pageStart/localIdx는 “viewLines 기준”
-                  const viewIdx = pageStart + localIdx;
-
-                  const parts = line.split(SEP);
-                  const word = parts[0]?.trim();
-                  const link = parts[1]?.trim();
-                  const hasLink = !!link;
-
-                  items.push(
-                    <li key={`view-${viewIdx}`} className="wordlist-core-item">
-                      {hasLink ? (
-                        <a
-                          href={link}
-                          className="text-decoration-none wordlist-core-link"
-                        >
-                          <span className="fw-bold">{word}</span>
-                        </a>
-                      ) : (
-                        <span className="fw-bold text-light wordlist-core-word">
-                          {word}
-                        </span>
-                      )}
-                    </li>,
-                  );
-                });
-
-                // 마지막 페이지면 빈 줄로 패딩
-                for (let i = 0; i < padCount; i++) {
-                  items.push(
-                    <li
-                      key={`pad-${i}`}
-                      className="wordlist-core-item wordlist-core-item-pad"
-                    >
-                      ·
-                    </li>,
-                  );
-                }
-
-                return items;
-              })()}
-            </ul>
-          </div>
-        </div>
+        <WordListFrame
+          wordItemFontSize={wordItemFontSize}
+          coreVisible={!loading && !error}
+          viewLines={viewLines}
+          pagedLines={pagedLines}
+          pageStart={pageStart}
+          pageSize={pageSize}
+          safePageIndex={safePageIndex}
+          totalPages={totalPages}
+          rawLines={rawLines}
+        />
 
         {/* 오른쪽 여백 = 다음 페이지 */}
         <div
@@ -734,20 +614,19 @@ export function WordListPage() {
         </div>
       </div>
 
-      {/* 페이지네이션 바로 위: 검색란 */}
-      <div className="d-flex justify-content-center mb-2">
-        <div style={{ width: '100%', maxWidth: 720 }}>
+
+      <div className="mt-auto pt-2 d-flex flex-column align-items-center">
+        {/* 페이지네이션 바로 위: 검색란 */}
+        <div style={{ width: '100%', maxWidth: 200 }} className='mb-2'>
           <input
             className="form-control bg-black text-light"
-            placeholder="검색 (포함 문자열 필터)"
+            placeholder="단어 검색"
             value={searchQuery}
             onChange={e => handleSearchChange(e.target.value)}
           />
         </div>
-      </div>
 
-      {/* 최하단: 페이지네이션 컨트롤 */}
-      <div className="mt-auto pt-2 d-flex flex-column align-items-center">
+        {/* 페이지네이션 컨트롤 */}
         <PaginationControls
           pageSize={pageSize}
           pageIndex={safePageIndex}
@@ -755,8 +634,7 @@ export function WordListPage() {
           onPageSizeChange={size => {
             setPageSize(size);
             setPageIndex(0);
-            // 페이지 사이즈 바꾸면 저장도 같이
-            saveBookmarkUnified({ wordIndex: 0 }).catch(console.error);
+            saveBookmark({ wordIndex: 0 }).catch(console.error);
           }}
           onPageIndexChange={setPageIndex}
         />

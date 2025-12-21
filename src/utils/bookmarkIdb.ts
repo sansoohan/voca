@@ -101,7 +101,7 @@ async function ensureSchemaTag(db: IDBDatabase): Promise<void> {
 
 // --- public API ---
 
-export async function idbGetBookmark(wordbookPath: string, currentUserUid: string | null): Promise<Bookmark | null> {
+export async function readBookmarkIndexDb(wordbookPath: string, currentUserUid: string | null): Promise<Bookmark | null> {
   assertGuestOnly(currentUserUid);
 
   const db = await openDB();
@@ -124,7 +124,7 @@ export async function idbGetBookmark(wordbookPath: string, currentUserUid: strin
   }
 }
 
-export async function idbSetBookmark(bookmark: Bookmark, currentUserUid: string | null): Promise<void> {
+export async function updateBookmarkIndexDb(bookmark: Bookmark, currentUserUid: string | null): Promise<void> {
   assertGuestOnly(currentUserUid);
 
   const db = await openDB();
@@ -137,36 +137,6 @@ export async function idbSetBookmark(bookmark: Bookmark, currentUserUid: string 
     const safe = stripUndefinedDeep(bookmark);
     store.put(safe);
 
-    await txDone(tx);
-  } finally {
-    db.close();
-  }
-}
-
-export async function idbDeleteBookmark(wordbookPath: string, currentUserUid: string | null): Promise<void> {
-  assertGuestOnly(currentUserUid);
-
-  const db = await openDB();
-  try {
-    await ensureSchemaTag(db);
-
-    const tx = db.transaction(STORE_BOOKMARKS, 'readwrite');
-    tx.objectStore(STORE_BOOKMARKS).delete(wordbookPath);
-    await txDone(tx);
-  } finally {
-    db.close();
-  }
-}
-
-export async function idbClearAllBookmarks(currentUserUid: string | null): Promise<void> {
-  assertGuestOnly(currentUserUid);
-
-  const db = await openDB();
-  try {
-    await ensureSchemaTag(db);
-
-    const tx = db.transaction(STORE_BOOKMARKS, 'readwrite');
-    tx.objectStore(STORE_BOOKMARKS).clear();
     await txDone(tx);
   } finally {
     db.close();
