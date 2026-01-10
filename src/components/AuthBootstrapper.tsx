@@ -1,6 +1,7 @@
 // components/AuthBootstrapper.tsx
 import { useEffect } from 'react';
 import { useLocation, useNavigate, generatePath } from 'react-router-dom';
+
 import { useAuth } from '~/contexts/AuthContext';
 import { ROUTE_SIGN_IN, ROUTE_SIGN_UP, ROUTE_USER_WORDS } from '~/constants/routes';
 

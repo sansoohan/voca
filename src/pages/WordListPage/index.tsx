@@ -1,11 +1,12 @@
-// WordListPage.tsx
+// pages/WordListPage/index.tsx
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useNavigate, Link, generatePath } from 'react-router-dom';
 import { ref as storageRef, getDownloadURL } from 'firebase/storage';
 import { ref as rtdbRef, get, push, set as rtdbSet } from 'firebase/database';
-import { onAuthStateChanged } from 'firebase/auth';
 
-import { auth, VITE_VOCA_ENV, storage, database } from '~/constants/firebase';
+import { useApp } from '~/contexts/AppContext';
+import { useAuth } from '~/contexts/AuthContext';
+import { VITE_VOCA_ENV, storage, database } from '~/constants/firebase';
 import { ROUTE_SIGN_IN, ROUTE_USER_WORDS_EDIT } from '~/constants/routes';
 import type { PageSize } from '~/types/editor';
 import { computeInitialPageSize, paginate } from '~/utils/editor';
@@ -16,18 +17,19 @@ import { HamburgerDivider } from '~/components/HamburgerDivider';
 import { LogoutButton } from '~/components/LogoutButton';
 import { readBookmarkIndexDb, updateBookmarkIndexDb, stripUndefinedDeep } from '~/utils/bookmarkIdb';
 import type { Bookmark } from '~/types/bookmark';
-import { useApp } from '~/contexts/AppContext';
 import { DefaultWordItemHeight } from '~/constants/editor';
-import { WordListFrame } from './WordListPage/components/WordListFrame';
+import { WordListFrame } from './components/WordListFrame';
 
-import './WordListPage.css';
+import './index.css';
 
 export function WordListPage() {
   const { uid } = useParams<{ uid: string }>();
   const nav = useNavigate();
 
+  const { user } = useAuth();
+  const currentUserUid = user?.uid ?? null;
+
   const [text, setText] = useState<string>('');
-  const [currentUserUid, setCurrentUserUid] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
 
@@ -55,16 +57,6 @@ export function WordListPage() {
   const prevAuthUidRef = useRef<string | null | undefined>(undefined);
 
   const wordbookPath = uid ? getDefaultWordbookPath(uid) : null;
-
-  // -------------------------
-  // Auth
-  // -------------------------
-  useEffect(() => {
-    const unsub = onAuthStateChanged(auth, user => {
-      setCurrentUserUid(user?.uid ?? null);
-    });
-    return () => unsub();
-  }, []);
 
   // -------------------------
   // Storage: wordbook text load
