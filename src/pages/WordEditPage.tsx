@@ -3,7 +3,6 @@ import { useEffect, useState, useRef, useLayoutEffect } from 'react';
 import { useParams, useNavigate, generatePath } from 'react-router-dom';
 import {
   ref as storageRef,
-  getDownloadURL,
   uploadString,
   getMetadata,
   updateMetadata,
@@ -29,6 +28,7 @@ import { HamburgerDivider } from '~/components/HamburgerDivider';
 import { storage } from '~/constants/firebase';
 import { useAuth } from '~/contexts/AuthContext';
 import { useApp } from '~/contexts/AppContext';
+import { loadWordbookTextCached } from '~/utils/wordbookIdb';
 
 export function WordEditPage() {
   const { uid } = useParams<{ uid: string }>();
@@ -94,17 +94,10 @@ export function WordEditPage() {
         const fileRef = storageRef(storage, path);
 
         try {
-          const [url, meta] = await Promise.all([
-            getDownloadURL(fileRef),
-            getMetadata(fileRef),
-          ]);
-
-          const res = await fetch(url);
-          const txt = await res.text();
+          const { text: txt, meta } = await loadWordbookTextCached(fileRef);
           setText(txt ?? '');
 
-          const metaAccess = meta.customMetadata?.readAccess as | UserLevel | undefined;
-
+          const metaAccess = meta.customMetadata?.readAccess as UserLevel | undefined;
           setReadAccess(metaAccess === UserLevel.Public ? UserLevel.Public : UserLevel.Owner);
           setError(null);
         } catch (err: any) {

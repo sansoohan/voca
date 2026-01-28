@@ -1,7 +1,7 @@
 // pages/WordListPage/index.tsx
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useNavigate, Link, generatePath } from 'react-router-dom';
-import { ref as storageRef, getDownloadURL } from 'firebase/storage';
+import { ref as storageRef } from 'firebase/storage';
 import { ref as rtdbRef, get, push, set as rtdbSet } from 'firebase/database';
 
 import { useApp } from '~/contexts/AppContext';
@@ -21,6 +21,7 @@ import { DefaultWordItemHeight } from '~/constants/editor';
 import { WordListFrame } from './components/WordListFrame';
 
 import './index.css';
+import { loadWordbookTextCached } from '~/utils/wordbookIdb';
 
 export function WordListPage() {
   const { uid } = useParams<{ uid: string }>();
@@ -69,19 +70,19 @@ export function WordListPage() {
       try {
         const path = getDefaultWordbookPath(uid);
         const fileRef = storageRef(storage, path);
-        const url = await getDownloadURL(fileRef);
-        const res = await fetch(url);
-        const txt = await res.text();
+
+        const { text: txt } = await loadWordbookTextCached(fileRef);
         setText(txt ?? '');
         setError(null);
       } catch (e: any) {
         console.error(e);
         if (e.code === 'storage/object-not-found') {
           setError('해당 단어장을 찾을 수 없습니다.');
+          setText('');
         } else {
           setError('단어장을 불러오는 중 오류가 발생했습니다.');
+          setText('');
         }
-        setText('');
       } finally {
         setLoading(false);
       }
