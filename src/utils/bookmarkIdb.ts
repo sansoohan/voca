@@ -142,3 +142,44 @@ export async function updateBookmarkIndexDb(bookmark: Bookmark, currentUserUid: 
     db.close();
   }
 }
+
+export async function listAllBookmarksIndexDb(currentUserUid: string | null): Promise<Bookmark[]> {
+  assertGuestOnly(currentUserUid);
+
+  const db = await openDB();
+  try {
+    await ensureSchemaTag(db);
+
+    const tx = db.transaction(STORE_BOOKMARKS, 'readonly');
+    const store = tx.objectStore(STORE_BOOKMARKS);
+
+    const req = store.getAll();
+    const result: Bookmark[] = await new Promise((resolve, reject) => {
+      req.onsuccess = () => resolve((req.result ?? []) as Bookmark[]);
+      req.onerror = () => reject(req.error);
+    });
+
+    await txDone(tx);
+    return result;
+  } finally {
+    db.close();
+  }
+}
+
+export async function deleteBookmarkIndexDb(wordbookPath: string, currentUserUid: string | null): Promise<void> {
+  assertGuestOnly(currentUserUid);
+
+  const db = await openDB();
+  try {
+    await ensureSchemaTag(db);
+
+    const tx = db.transaction(STORE_BOOKMARKS, 'readwrite');
+    const store = tx.objectStore(STORE_BOOKMARKS);
+
+    store.delete(wordbookPath);
+
+    await txDone(tx);
+  } finally {
+    db.close();
+  }
+}

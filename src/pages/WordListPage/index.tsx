@@ -24,9 +24,9 @@ import './index.css';
 import { WordListFrame } from './components/WordListFrame';
 import { MyWordbooksModal } from './components/MyWordbooksModal';
 import { writeLastWordbook } from '~/utils/userWordbookIdb';
+import { RecentWordbooksModal } from './components/RecentWordbooksModal';
 
 export function WordListPage() {
-  // 변경: filename 파라미터 받기
   const { uid, filename } = useParams<{ uid: string; filename?: string }>();
   const resolvedFilename: string = filename ?? 'default.txt';
 
@@ -65,6 +65,8 @@ export function WordListPage() {
   // 내 단어장들 모달 표시 상태
   const [showMyWordbooks, setShowMyWordbooks] = useState(false);
   const wordbookPath = (uid && resolvedFilename) ? getWordbookPath(uid, resolvedFilename) : null;
+
+  const [showRecentWordbooks, setShowRecentWordbooks] = useState(false);
 
   // -------------------------
   // Storage: wordbook text load
@@ -193,6 +195,16 @@ export function WordListPage() {
   useEffect(() => {
     if (!uid || !wordbookPath) return;
 
+    // 단어장 접근 확인: 로딩 중이면 대기, 에러면(비공개/없음) 북마크 자동생성 금지
+    if (loading) return;
+
+    // 비공개/권한없음/없는 파일이면 여기서 끝내고 bookmarksLoaded만 true 처리
+    if (error) {
+      setBookmarksLoaded(true);
+      setInitialPageApplied(false);
+      return;
+    }
+
     let cancelled = false;
 
     const loadBookmarkUnified = async () => {
@@ -207,14 +219,26 @@ export function WordListPage() {
             setSearchQuery(typeof bookmark.searchQuery === 'string' ? bookmark.searchQuery : '');
             setShuffleWordIndices(Array.isArray(bookmark.shuffleWordIndices) ? bookmark.shuffleWordIndices : null);
           } else {
-            setBookmarkWordIndex(null);
+            // 여기 들어오기 전에 (loading=false && error=null) 이므로 “게스트가 접근 가능한 단어장”이 확정됨
+            const created: Bookmark = stripUndefinedDeep<Bookmark>({
+              wordbookPath,
+              wordIndex: 0,
+              updatedAt: Date.now(),
+              searchQuery: '',
+              shuffleWordIndices: undefined,
+            });
+
+            await updateBookmarkIndexDb(created, null);
+
+            // UI도 기본 상태로 세팅
+            setBookmarkWordIndex(0);
             setSearchQuery('');
             setShuffleWordIndices(null);
           }
         } catch (e) {
           console.error('[IDB] load failed', e);
           if (!cancelled) {
-            setBookmarkWordIndex(null);
+            setBookmarkWordIndex(0);
             setSearchQuery('');
             setShuffleWordIndices(null);
           }
@@ -228,12 +252,29 @@ export function WordListPage() {
       try {
         const viewerUid = currentUserUid;
         const basePath = `voca/${VITE_VOCA_ENV}/users/${viewerUid}/bookmarks`;
-        const snap = await get(rtdbRef(database, basePath));
+        const baseRef = rtdbRef(database, basePath);
+
+        const snap = await get(baseRef);
         if (cancelled) return;
 
+        // 1) 북마크 노드 자체가 없으면: 기본 생성
         if (!snap.exists()) {
-          setBookmarkId(null);
-          setBookmarkWordIndex(null);
+          const created: Bookmark = stripUndefinedDeep<Bookmark>({
+            wordbookPath,
+            wordIndex: 0,
+            updatedAt: Date.now(),
+            searchQuery: '',
+            shuffleWordIndices: undefined,
+          });
+
+          const newRef = push(baseRef);
+          const newKey = newRef.key!;
+          await rtdbSet(rtdbRef(database, `${basePath}/${newKey}`), created);
+
+          if (cancelled) return;
+
+          setBookmarkId(newKey);
+          setBookmarkWordIndex(0);
           setSearchQuery('');
           setShuffleWordIndices(null);
           setBookmarksLoaded(true);
@@ -250,15 +291,31 @@ export function WordListPage() {
           }
         }
 
+        // 2) 북마크는 있는데, 이 wordbookPath에 해당하는 게 없으면: 기본 생성
         if (!best) {
-          setBookmarkId(null);
-          setBookmarkWordIndex(null);
+          const created: Bookmark = stripUndefinedDeep<Bookmark>({
+            wordbookPath,
+            wordIndex: 0,
+            updatedAt: Date.now(),
+            searchQuery: '',
+            shuffleWordIndices: undefined,
+          });
+
+          const newRef = push(baseRef);
+          const newKey = newRef.key!;
+          await rtdbSet(rtdbRef(database, `${basePath}/${newKey}`), created);
+
+          if (cancelled) return;
+
+          setBookmarkId(newKey);
+          setBookmarkWordIndex(0);
           setSearchQuery('');
           setShuffleWordIndices(null);
           setBookmarksLoaded(true);
           return;
         }
 
+        // 기존 로직 유지
         setBookmarkId(best.key);
         setBookmarkWordIndex(best.data.wordIndex ?? 0);
         setSearchQuery(best.data.searchQuery ?? '');
@@ -268,7 +325,7 @@ export function WordListPage() {
         console.error('[RTDB] load failed', e);
         if (!cancelled) {
           setBookmarkId(null);
-          setBookmarkWordIndex(null);
+          setBookmarkWordIndex(0);
           setSearchQuery('');
           setShuffleWordIndices(null);
           setBookmarksLoaded(true);
@@ -283,7 +340,7 @@ export function WordListPage() {
     return () => {
       cancelled = true;
     };
-  }, [uid, wordbookPath, currentUserUid]);
+  }, [uid, wordbookPath, currentUserUid, loading, error]);
 
   // -------------------------
   // 🔹 북마크(wordIndex) → 초기 pageIndex 반영 (딱 1번)
@@ -559,6 +616,16 @@ export function WordListPage() {
               </>
             )}
 
+            <li>
+              <button
+                className="dropdown-item"
+                type="button"
+                onClick={() => setShowRecentWordbooks(true)}
+              >
+                최근에 본 단어장들
+              </button>
+            </li>
+
             <HamburgerDivider />
 
             {isLoggedIn ? (
@@ -662,6 +729,18 @@ export function WordListPage() {
           onMove={(nextFilename) => {
             setShowMyWordbooks(false);
             nav(generatePath('/user/:uid/word/:filename', { uid, filename: nextFilename }));
+          }}
+        />
+      )}
+
+      {showRecentWordbooks && uid && (
+        <RecentWordbooksModal
+          currentUid={uid}
+          currentFilename={resolvedFilename}        
+          onClose={() => setShowRecentWordbooks(false)}
+          onMove={(targetUid, targetFilename) => {
+            setShowRecentWordbooks(false);
+            nav(generatePath('/user/:uid/word/:filename', { uid: targetUid, filename: targetFilename }));
           }}
         />
       )}
