@@ -11,20 +11,25 @@ import { ROUTE_SIGN_IN, ROUTE_USER_WORDS_EDIT } from '~/constants/routes';
 import type { PageSize } from '~/types/editor';
 import { computeInitialPageSize, paginate } from '~/utils/editor';
 import { PaginationControls } from '~/components/PaginationControls';
-import { getDefaultWordbookPath } from '~/utils/storage';
+import { getWordbookPath } from '~/utils/storage';
 import { HamburgerMenu } from '~/components/HamburgerMenu';
 import { HamburgerDivider } from '~/components/HamburgerDivider';
 import { LogoutButton } from '~/components/LogoutButton';
 import { readBookmarkIndexDb, updateBookmarkIndexDb, stripUndefinedDeep } from '~/utils/bookmarkIdb';
 import type { Bookmark } from '~/types/bookmark';
 import { DefaultWordItemHeight } from '~/constants/editor';
-import { WordListFrame } from './components/WordListFrame';
-
-import './index.css';
 import { loadWordbookTextCached } from '~/utils/wordbookIdb';
 
+import './index.css';
+import { WordListFrame } from './components/WordListFrame';
+import { MyWordbooksModal } from './components/MyWordbooksModal';
+import { writeLastWordbook } from '~/utils/userWordbookIdb';
+
 export function WordListPage() {
-  const { uid } = useParams<{ uid: string }>();
+  // 변경: filename 파라미터 받기
+  const { uid, filename } = useParams<{ uid: string; filename?: string }>();
+  const resolvedFilename: string = filename ?? 'default.txt';
+
   const nav = useNavigate();
 
   const { user } = useAuth();
@@ -54,21 +59,23 @@ export function WordListPage() {
   const [searchQuery, setSearchQuery] = useState<string>(''); // '' = no filter
   const [shuffleWordIndices, setShuffleWordIndices] = useState<number[] | null>(null);
 
-  // ✅ 로그인/로그아웃 전환 프레임에서는 저장 금지하기 위한 ref
+  // 로그인/로그아웃 전환 프레임에서는 저장 금지하기 위한 ref
   const prevAuthUidRef = useRef<string | null | undefined>(undefined);
 
-  const wordbookPath = uid ? getDefaultWordbookPath(uid) : null;
+  // 내 단어장들 모달 표시 상태
+  const [showMyWordbooks, setShowMyWordbooks] = useState(false);
+  const wordbookPath = (uid && resolvedFilename) ? getWordbookPath(uid, resolvedFilename) : null;
 
   // -------------------------
   // Storage: wordbook text load
   // -------------------------
   useEffect(() => {
-    if (!uid) return;
+    if (!uid || !resolvedFilename) return;
 
     const fetchText = async () => {
       setLoading(true);
       try {
-        const path = getDefaultWordbookPath(uid);
+        const path = getWordbookPath(uid, resolvedFilename);
         const fileRef = storageRef(storage, path);
 
         const { text: txt } = await loadWordbookTextCached(fileRef);
@@ -89,7 +96,7 @@ export function WordListPage() {
     };
 
     fetchText();
-  }, [uid]);
+  }, [uid, resolvedFilename]);
 
   // -------------------------
   // Helpers: parse lines
@@ -98,15 +105,6 @@ export function WordListPage() {
     return text.split('\n').filter(l => l.trim() !== '');
   }, [text]);
 
-  /**
-   * 필터/셔플 적용 후 “보기용 순서”를 만든다.
-   * - searchQuery: 포함 문자열 필터 (word + link 전체 line 기준; 원하면 word만으로 바꿔도 됨)
-   * - shuffleWordIndices: “원본 인덱스 배열”
-   *
-   * 규칙:
-   * - 배열에 있는 인덱스 중 존재하지 않는 건 skip
-   * - 배열 길이까지만 셔플 적용 + 이후 추가된 단어는 자연 순서로 뒤에 붙음
-   */
   const viewIndices = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
 
@@ -157,15 +155,16 @@ export function WordListPage() {
     if (!wordbookPath) return;
 
     // 반드시 값이 들어가도록(=undefined 금지)
-    const wordIndex = typeof next.wordIndex === 'number' && Number.isFinite(next.wordIndex) ? next.wordIndex : 0;
+    const wordIndex =
+      typeof next.wordIndex === 'number' && Number.isFinite(next.wordIndex) ? next.wordIndex : 0;
 
     const bookmark = stripUndefinedDeep<Bookmark>({
       wordbookPath,
       wordIndex,
       updatedAt: Date.now(),
       searchQuery: next.searchQuery !== undefined ? next.searchQuery : searchQuery,
-      shuffleWordIndices: next.shuffleWordIndices !== undefined
-        ? next.shuffleWordIndices : shuffleWordIndices ?? undefined,
+      shuffleWordIndices:
+        next.shuffleWordIndices !== undefined ? next.shuffleWordIndices : shuffleWordIndices ?? undefined,
     });
 
     // 로그인 → RTDB
@@ -182,9 +181,7 @@ export function WordListPage() {
       }
 
       const bookmarkRef = rtdbRef(database, `${basePath}/${id}`);
-
       await rtdbSet(bookmarkRef, bookmark);
-
       return;
     }
 
@@ -290,24 +287,20 @@ export function WordListPage() {
 
   // -------------------------
   // 🔹 북마크(wordIndex) → 초기 pageIndex 반영 (딱 1번)
-  // - “보기용(viewLines)” 기준으로 계산
   // -------------------------
   useEffect(() => {
-    if (loading) return;                // text 로딩 끝난 다음에만
+    if (loading) return;
     if (!bookmarksLoaded) return;
     if (initialPageApplied) return;
 
-    // viewLines는 text+검색+셔플이 반영된 “현재 보기”
     if (!viewLines) return;
 
-    // text 로딩은 끝났는데 단어가 진짜 0개인 경우만 여기서 적용 완료 처리
     if (viewLines.length === 0) {
       setPageIndex(0);
       setInitialPageApplied(true);
       return;
     }
 
-    // 북마크 없음 → 0페이지
     if (bookmarkWordIndex == null) {
       setPageIndex(0);
       setInitialPageApplied(true);
@@ -335,14 +328,12 @@ export function WordListPage() {
   ]);
 
   // -------------------------
-  // 페이지 변경 시 저장 (RTDB/IDB)
+  // 북마크 저장 (RTDB/IDB)
   // -------------------------
-  useEffect(() => {
+  const savePageBookmarkByIndex = useCallback(async (pageIndexToSave: number, pageSizeToSave: PageSize) => {
     if (!bookmarksLoaded || !initialPageApplied) return;
     if (!uid || !wordbookPath) return;
 
-    // ✅ auth 전환(로그인/로그아웃) 프레임에서는 저장 금지
-    // - 첫 실행(undef)도 스킵해서 "초기 로딩 직후 불필요 저장"도 줄임
     const prevUid = prevAuthUidRef.current;
     if (prevUid === undefined) {
       prevAuthUidRef.current = currentUserUid ?? null;
@@ -353,30 +344,40 @@ export function WordListPage() {
       return;
     }
 
-    // viewLines 기준으로 저장
     if (viewLines.length === 0) return;
 
-    const { safePageIndex } = paginate(viewLines, pageSize, pageIndex);
-    const wordIndex = safePageIndex * pageSize;
+    const { safePageIndex } = paginate(viewLines, pageSizeToSave, pageIndexToSave);
+    const wordIndex = safePageIndex * pageSizeToSave;
 
-    saveBookmark({ wordIndex }).catch(err => {
-      console.error('[Bookmark] save failed', err);
-    });
+    await saveBookmark({ wordIndex });
   }, [
-    pageIndex,
-    pageSize,
-    uid,
-    wordbookPath,
     bookmarksLoaded,
     initialPageApplied,
-    currentUserUid, // ✅ auth 전환 감지용(guard)
+    uid,
+    wordbookPath,
+    currentUserUid,
     viewLines,
     saveBookmark,
   ]);
 
   // -------------------------
-  // Navigation actions
+  // 마지막에 본 단어장을 indexedDB 에 저장(로그인시 리다이렉트)
   // -------------------------
+  useEffect(() => {
+    if (!uid) return;
+
+    // 게스트/타유저는 기록하지 않음
+    if (!currentUserUid) return;
+    if (currentUserUid !== uid) return;
+
+    const filenameToWrite = resolvedFilename;
+    const fullPath = getWordbookPath(uid, filenameToWrite);
+
+    writeLastWordbook(uid, filenameToWrite, fullPath).catch((e) => {
+      console.error('[WordListPage] writeLastWordbook failed', e);
+    });
+  }, [uid, resolvedFilename, currentUserUid]);
+
   const canEdit = currentUserUid === uid;
   const isLoggedIn = !!currentUserUid;
 
@@ -407,41 +408,41 @@ export function WordListPage() {
       : currentPage
     : 0;
 
-  const goPrevPage = () => {
+  const goPrevPage = useCallback(() => {
     if (!canCycle) return;
-    setPageIndex(prev => (prev > 0 ? prev - 1 : totalPages - 1));
-  };
 
-  const goNextPage = () => {
+    const next = pageIndex > 0 ? pageIndex - 1 : totalPages - 1;
+    setPageIndex(next);
+    savePageBookmarkByIndex(next, pageSize).catch(err =>
+      console.error('[Bookmark] save failed', err),
+    );
+  }, [canCycle, pageIndex, totalPages, pageSize, savePageBookmarkByIndex]);
+
+  const goNextPage = useCallback(() => {
     if (!canCycle) return;
-    setPageIndex(prev => (prev < totalPages - 1 ? prev + 1 : 0));
-  };
 
-  // -------------------------
-  // Search handlers (검색 시 페이지 초기화 + 즉시 북마크 저장)
-  // -------------------------
-  const handleSearchChange = (q: string) => {
+    const next = pageIndex < totalPages - 1 ? pageIndex + 1 : 0;
+    setPageIndex(next);
+    savePageBookmarkByIndex(next, pageSize).catch(err =>
+      console.error('[Bookmark] save failed', err),
+    );
+  }, [canCycle, pageIndex, totalPages, pageSize, savePageBookmarkByIndex]);
+
+  const handleSearchChange = useCallback((q: string) => {
     setSearchQuery(q);
 
-    // 규칙: 검색 변경 시 셔플은 무조건 해제
     if (shuffleWordIndices !== null) {
       setShuffleWordIndices(null);
     }
 
-    // 검색하면 위치 초기화 (pageIndex 기반이라도 결국 wordIndex=0 저장)
     setPageIndex(0);
-
-    // 북마크에 즉시 기록 (undefined 절대 금지: null 명시)
     saveBookmark({
       wordIndex: 0,
       searchQuery: q,
       shuffleWordIndices: null,
     }).catch(err => console.error('[bookmark] save on search change', err));
-  };
+  }, [shuffleWordIndices, saveBookmark]);
 
-  // -------------------------
-  // Shuffle handlers (파일 변경 X, 북마크 레벨에서만 셔플)
-  // -------------------------
   const handleShuffle = () => {
     const q = searchQuery.trim().toLowerCase();
     const filterOnly: number[] = [];
@@ -450,7 +451,6 @@ export function WordListPage() {
       if (!q || line.toLowerCase().includes(q)) filterOnly.push(i);
     }
 
-    // Fisher-Yates
     for (let i = filterOnly.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1));
       [filterOnly[i], filterOnly[j]] = [filterOnly[j], filterOnly[i]];
@@ -458,8 +458,6 @@ export function WordListPage() {
 
     setShuffleWordIndices(filterOnly);
     setPageIndex(0);
-
-    // “셔플 누르는 순간” 북마크에 기록
     saveBookmark({ wordIndex: 0, shuffleWordIndices: filterOnly }).catch(
       err => console.error('[Bookmark] save shuffle failed', err),
     );
@@ -468,15 +466,11 @@ export function WordListPage() {
   const handleShuffleClear = () => {
     setShuffleWordIndices(null);
     setPageIndex(0);
-
     saveBookmark({ wordIndex: 0, shuffleWordIndices: [] }).catch(err =>
       console.error('[Bookmark] clear shuffle failed', err),
     );
   };
 
-  // -------------------------
-  // Render states
-  // -------------------------
   if (error) {
     return (
       <div className="container py-5">
@@ -544,9 +538,22 @@ export function WordListPage() {
                   <button
                     className="dropdown-item"
                     type="button"
-                    onClick={() => nav(generatePath(ROUTE_USER_WORDS_EDIT, { uid }))}
+                    // 변경: edit 라우트도 resolvedFilename 포함
+                    onClick={() => nav(
+                      generatePath(ROUTE_USER_WORDS_EDIT, {uid, filename: resolvedFilename }))
+                    }
                   >
                     단어장 수정
+                  </button>
+                </li>
+
+                <li>
+                  <button
+                    className="dropdown-item"
+                    type="button"
+                    onClick={() => setShowMyWordbooks(true)}
+                  >
+                    내 단어장들
                   </button>
                 </li>
               </>
@@ -556,7 +563,7 @@ export function WordListPage() {
 
             {isLoggedIn ? (
               <LogoutButton />
-            ):(
+            ) : (
               <li>
                 <button
                   className="dropdown-item"
@@ -571,9 +578,7 @@ export function WordListPage() {
         </div>
       </div>
 
-      {/* 중앙: 좌/우 페이지 네비 + 코어 단어 리스트 */}
       <div className="d-flex mt-2 mb-3 wordlist-core-row">
-        {/* 왼쪽 여백 = 이전 페이지 */}
         <div
           onClick={goPrevPage}
           className="d-flex align-items-center justify-content-center wordlist-side-zone wordlist-side-zone-left"
@@ -602,7 +607,6 @@ export function WordListPage() {
           rawLines={rawLines}
         />
 
-        {/* 오른쪽 여백 = 다음 페이지 */}
         <div
           onClick={goNextPage}
           className="d-flex align-items-center justify-content-center wordlist-side-zone wordlist-side-zone-right"
@@ -620,10 +624,8 @@ export function WordListPage() {
         </div>
       </div>
 
-
       <div className="mt-auto pt-2 d-flex flex-column align-items-center">
-        {/* 페이지네이션 바로 위: 검색란 */}
-        <div style={{ width: '100%', maxWidth: 200 }} className='mb-2'>
+        <div style={{ width: '100%', maxWidth: 200 }} className="mb-2">
           <input
             className="form-control bg-black text-light"
             placeholder="단어 검색"
@@ -632,7 +634,6 @@ export function WordListPage() {
           />
         </div>
 
-        {/* 페이지네이션 컨트롤 */}
         <PaginationControls
           pageSize={pageSize}
           pageIndex={safePageIndex}
@@ -640,11 +641,30 @@ export function WordListPage() {
           onPageSizeChange={size => {
             setPageSize(size);
             setPageIndex(0);
-            saveBookmark({ wordIndex: 0 }).catch(console.error);
+            savePageBookmarkByIndex(0, size).catch((err) => {
+              console.error('[Bookmark] save failed', err);
+            });
           }}
-          onPageIndexChange={setPageIndex}
+          onPageIndexChange={(next) => {
+            setPageIndex(next);
+            savePageBookmarkByIndex(next, pageSize).catch((err) => {
+              console.error('[Bookmark] save failed', err);
+            });
+          }}
         />
       </div>
+
+      {showMyWordbooks && uid && (
+        <MyWordbooksModal
+          uid={uid}
+          currentFilename={resolvedFilename}
+          onClose={() => setShowMyWordbooks(false)}
+          onMove={(nextFilename) => {
+            setShowMyWordbooks(false);
+            nav(generatePath('/user/:uid/word/:filename', { uid, filename: nextFilename }));
+          }}
+        />
+      )}
     </div>
   );
 }

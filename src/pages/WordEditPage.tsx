@@ -7,6 +7,21 @@ import {
   getMetadata,
   updateMetadata,
 } from 'firebase/storage';
+
+import { useAuth } from '~/contexts/AuthContext';
+import { useApp } from '~/contexts/AppContext';
+import { ROUTE_USER_WORDS } from '~/constants/routes';
+import { storage } from '~/constants/firebase';
+import { EditorModalMode, EditorMode } from '~/enums/editor';
+import { UserLevel } from '~/enums/user';
+import type { PageSize, SimpleItem } from '~/types/editor';
+import { PaginationControls } from '~/components/PaginationControls';
+import { DefaultWordItemHeight, SEP } from '~/constants/editor';
+import { HamburgerMenu } from '~/components/HamburgerMenu';
+import { LogoutButton } from '~/components/LogoutButton';
+import { HamburgerDivider } from '~/components/HamburgerDivider';
+import { DEFAULT_WORDBOOK_FILENAME, getWordbookPath } from '~/utils/storage';
+import { loadWordbookTextCached } from '~/utils/wordbookIdb';
 import {
   parseTextToWordLines,
   wordLinesToText,
@@ -15,23 +30,11 @@ import {
   paginate,
   parseLineForSimple,
 } from '~/utils/editor';
-import { ROUTE_USER_WORDS } from '~/constants/routes';
-import { EditorModalMode, EditorMode } from '~/enums/editor';
-import type { PageSize, SimpleItem } from '~/types/editor';
-import { PaginationControls } from '~/components/PaginationControls';
-import { UserLevel } from '~/enums/user';
-import { getDefaultWordbookPath } from '~/utils/storage';
-import { DefaultWordItemHeight, SEP } from '~/constants/editor';
-import { HamburgerMenu } from '~/components/HamburgerMenu';
-import { LogoutButton } from '~/components/LogoutButton';
-import { HamburgerDivider } from '~/components/HamburgerDivider';
-import { storage } from '~/constants/firebase';
-import { useAuth } from '~/contexts/AuthContext';
-import { useApp } from '~/contexts/AppContext';
-import { loadWordbookTextCached } from '~/utils/wordbookIdb';
 
 export function WordEditPage() {
-  const { uid } = useParams<{ uid: string }>();
+  const { uid, filename } = useParams<{ uid: string; filename?: string }>();
+  const resolvedFilename: string = filename ?? DEFAULT_WORDBOOK_FILENAME;
+
   const nav = useNavigate();
 
   const { user } = useAuth();
@@ -64,7 +67,7 @@ export function WordEditPage() {
   const [modalWord, setModalWord] = useState('');
   const [modalLink, setModalLink] = useState('');
 
-  // 🔹 랜덤 섞기 안내 모달
+  // 랜덤 섞기 안내 모달
   const [shuffleNoticeOpen, setShuffleNoticeOpen] = useState(false);
 
   // 고급 에디터 textarea ref (커서 위치 / 스크롤 제어용)
@@ -90,7 +93,8 @@ export function WordEditPage() {
           return;
         }
 
-        const path = getDefaultWordbookPath(uid);
+        // 변경: filename 기반 path
+        const path = getWordbookPath(uid, resolvedFilename);
         const fileRef = storageRef(storage, path);
 
         try {
@@ -122,11 +126,12 @@ export function WordEditPage() {
     };
 
     fetchData();
-  }, [uid, currentUserUid]);
+  }, [uid, currentUserUid, resolvedFilename]);
 
   const handleBack = () => {
     if (!uid) return;
-    nav(generatePath(ROUTE_USER_WORDS, { uid }));
+    // 변경: 목록 라우트도 filename 포함
+    nav(generatePath(ROUTE_USER_WORDS, { uid, filename: resolvedFilename }));
   };
 
   const handleRandom = () => {
@@ -144,7 +149,8 @@ export function WordEditPage() {
       const lines = parseTextToWordLines(text);
       const newText = wordLinesToText(lines);
 
-      const path = getDefaultWordbookPath(uid);
+      // 변경: filename 기반 path
+      const path = getWordbookPath(uid, resolvedFilename);
       const fileRef = storageRef(storage, path);
 
       await uploadString(fileRef, newText, 'raw', {
@@ -153,7 +159,8 @@ export function WordEditPage() {
         },
       });
 
-      nav(generatePath(ROUTE_USER_WORDS, { uid }));
+      // 변경: 저장 후 이동도 filename 포함
+      nav(generatePath(ROUTE_USER_WORDS, { uid, filename: resolvedFilename }));
     } catch (e) {
       console.error(e);
       setError('저장 중 오류가 발생했습니다.');
@@ -206,13 +213,13 @@ export function WordEditPage() {
     }
 
     const prev = readAccess;
-    const next =
-      prev === UserLevel.Owner ? UserLevel.Public : UserLevel.Owner;
+    const next = prev === UserLevel.Owner ? UserLevel.Public : UserLevel.Owner;
 
     setReadAccess(next);
 
     try {
-      const path = getDefaultWordbookPath(uid);
+      // 변경: filename 기반 path
+      const path = getWordbookPath(uid, resolvedFilename);
       const fileRef = storageRef(storage, path);
 
       try {
@@ -603,7 +610,7 @@ export function WordEditPage() {
         </div>
       )}
 
-      {/* 🔹 랜덤 섞기 안내 모달 */}
+      {/* 랜덤 섞기 안내 모달 */}
       {shuffleNoticeOpen && (
         <div
           className="position-fixed top-0 start-0 w-100 h-100 d-flex justify-content-center align-items-center"
