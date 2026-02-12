@@ -18,6 +18,8 @@ export default function WordListPageRenderer() {
     resolvedFilename,
     nav,
 
+    isContentReady,
+
     canEdit,
     isLoggedIn,
 
@@ -70,7 +72,7 @@ export default function WordListPageRenderer() {
     );
   }
 
-  if (loading) {
+  if (loading || !isContentReady) {
     return (
       <div className="container py-5">
         <p>로딩 중...</p>

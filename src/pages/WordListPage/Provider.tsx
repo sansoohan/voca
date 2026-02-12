@@ -22,6 +22,9 @@ type WordListPageContextValue = {
   resolvedFilename: string;
   nav: ReturnType<typeof useNavigate>;
 
+  // rendering readiness
+  isContentReady: boolean;
+
   // auth
   currentUserUid: string | null;
   canEdit: boolean;
@@ -126,11 +129,27 @@ export function WordListPageProvider({ children }: { children: React.ReactNode }
 
   const wordbookPath = (uid && resolvedFilename) ? getWordbookPath(uid, resolvedFilename) : null;
 
+  const [authReady, setAuthReady] = useState(false);
+
+  useEffect(() => {
+    // useAuth()가 한 번이라도 값(로그인/비로그인)을 내놓으면 true
+    // (user가 null이어도 “비로그인 확정”이므로 ready)
+    setAuthReady(true);
+  }, [user]);
+
+  const isContentReady = useMemo(() => {
+    // 에러면 그냥 에러를 보여주면 되므로 ready 취급
+    if (error) return true;
+    // loading 끝 + 북마크 로드 끝 + 초기 page 적용 끝이어야 리스트 렌더 OK
+    return !loading && bookmarksLoaded && initialPageApplied;
+  }, [loading, error, bookmarksLoaded, initialPageApplied]);
+
   // -------------------------
   // Storage: wordbook text load (cached)
   // -------------------------
   useEffect(() => {
     if (!uid || !resolvedFilename) return;
+    if (!authReady) return; // ✅ auth 확정 전엔 fetch 하지 않음
 
     const fetchText = async () => {
       setLoading(true);
@@ -143,9 +162,16 @@ export function WordListPageProvider({ children }: { children: React.ReactNode }
         setError(null);
       } catch (e: any) {
         console.error(e);
+
         if (e.code === 'storage/object-not-found') {
-          setError('해당 단어장을 찾을 수 없습니다.');
-          setText('');
+          // ✅ 본인 단어장이면 “없는 게 정상”일 수 있음 → 빈 단어장으로 시작
+          if (currentUserUid && currentUserUid === uid) {
+            setText('');
+            setError(null);
+          } else {
+            setError('해당 단어장을 찾을 수 없습니다.');
+            setText('');
+          }
         } else {
           setError('단어장을 불러오는 중 오류가 발생했습니다.');
           setText('');
@@ -156,7 +182,7 @@ export function WordListPageProvider({ children }: { children: React.ReactNode }
     };
 
     fetchText();
-  }, [uid, resolvedFilename]);
+  }, [uid, resolvedFilename, authReady, currentUserUid]);
 
   // -------------------------
   // Helpers: parse lines
@@ -541,6 +567,8 @@ export function WordListPageProvider({ children }: { children: React.ReactNode }
     uid,
     resolvedFilename,
     nav,
+
+    isContentReady,
 
     currentUserUid,
     canEdit,
