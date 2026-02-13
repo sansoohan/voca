@@ -14,6 +14,7 @@ import { ensureDefaultWordbook } from '~/utils/storage';
 
 type AuthContextValue = {
   user: User | null;
+  currentUserUid:  string | null;
   initializing: boolean;
 };
 
@@ -25,6 +26,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   // 같은 uid에 대해 기본 단어장 여러 번 만들지 않도록
   const ensuredSetRef = useRef<Set<string>>(new Set());
+
+  const currentUserUid = user?.uid ?? null;
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, async fbUser => {
@@ -50,6 +53,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const value: AuthContextValue = {
     user,
+    currentUserUid,
     initializing,
   };
 

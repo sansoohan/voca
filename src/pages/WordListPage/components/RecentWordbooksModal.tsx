@@ -55,8 +55,7 @@ export function RecentWordbooksModal({
   onMove,
   onClose,
 }: Props) {
-  const { user } = useAuth();
-  const currentUserUid = user?.uid ?? null;
+  const { currentUserUid } = useAuth();
 
   const [items, setItems] = useState<Item[]>([]);
   const [selectedKey, setSelectedKey] = useState<string | null>(null); // wordbookPath

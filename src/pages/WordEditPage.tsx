@@ -37,8 +37,7 @@ export function WordEditPage() {
 
   const nav = useNavigate();
 
-  const { user } = useAuth();
-  const currentUserUid = user?.uid ?? null;
+  const { currentUserUid } = useAuth();
 
   const { isMobile } = useApp();
   const wordItemRatio = isMobile ? 0.75 : 0.92;
